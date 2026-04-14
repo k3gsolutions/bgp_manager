@@ -1,0 +1,136 @@
+import { useState } from 'react'
+import { Database, Download, Upload, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { managementApi } from '../api/management.js'
+import { formatAxiosError } from '../api/client.js'
+
+function downloadJson(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+export default function ManagementPage() {
+  const [busyExport, setBusyExport] = useState(false)
+  const [busyImport, setBusyImport] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+
+  async function handleExport() {
+    setErr('')
+    setMsg('')
+    setBusyExport(true)
+    try {
+      const data = await managementApi.exportBackup()
+      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      downloadJson(`bgp-manager-backup-${ts}.json`, data)
+      setMsg(`Backup exportado (${Object.values(data.table_counts || {}).reduce((a, b) => a + b, 0)} registros).`)
+    } catch (e) {
+      setErr(formatAxiosError(e))
+    } finally {
+      setBusyExport(false)
+    }
+  }
+
+  async function handleImportFile(file) {
+    setErr('')
+    setMsg('')
+    if (!file) return
+    const text = await file.text()
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      setErr('Arquivo inválido: JSON mal formatado.')
+      return
+    }
+    const data = parsed?.data
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      setErr("Arquivo inválido: campo 'data' não encontrado.")
+      return
+    }
+    if (!window.confirm('Importar backup completo? Os registros atuais serão substituídos.')) return
+    setBusyImport(true)
+    try {
+      const res = await managementApi.importBackup(data)
+      const total = Object.values(res.table_counts || {}).reduce((a, b) => a + b, 0)
+      setMsg(`Backup importado com sucesso (${total} registros).`)
+    } catch (e) {
+      setErr(formatAxiosError(e))
+    } finally {
+      setBusyImport(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Database size={18} className="text-ink-secondary" />
+        <h1 className="text-[18px] font-bold text-ink-primary">Gerenciamento</h1>
+      </div>
+
+      <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-[12px] text-amber-100">
+        <div className="flex items-start gap-2">
+          <AlertTriangle size={15} className="mt-0.5 text-amber-300" />
+          <p>
+            Backup inclui dados sensíveis (utilizadores, hashes e credenciais cifradas de dispositivos).
+            Guarde o arquivo em local seguro e importe apenas em ambiente confiável.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-[#1e2235] bg-[#161922] p-4">
+          <h2 className="text-[14px] font-semibold text-ink-primary mb-2">Exportar backup</h2>
+          <p className="text-[12px] text-ink-muted mb-3">
+            Baixa um JSON com o estado completo do banco para restauração em outro servidor.
+          </p>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={busyExport || busyImport}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-blue text-white text-[12px] font-semibold disabled:opacity-50"
+          >
+            {busyExport ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            Exportar backup
+          </button>
+        </div>
+
+        <div className="rounded-xl border border-[#1e2235] bg-[#161922] p-4">
+          <h2 className="text-[14px] font-semibold text-ink-primary mb-2">Importar backup</h2>
+          <p className="text-[12px] text-ink-muted mb-3">
+            Restaura um backup completo previamente exportado, substituindo os dados atuais.
+          </p>
+          <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#252840] text-ink-secondary text-[12px] hover:bg-[#1e2235] cursor-pointer">
+            {busyImport ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+            Selecionar backup (.json)
+            <input
+              type="file"
+              accept="application/json,.json"
+              disabled={busyExport || busyImport}
+              className="hidden"
+              onChange={e => handleImportFile(e.target.files?.[0] || null)}
+            />
+          </label>
+        </div>
+      </div>
+
+      {msg && (
+        <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-[12px] text-green-300 flex items-center gap-2">
+          <CheckCircle2 size={14} />
+          {msg}
+        </div>
+      )}
+      {err && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] text-red-300">
+          {err}
+        </div>
+      )}
+    </div>
+  )
+}

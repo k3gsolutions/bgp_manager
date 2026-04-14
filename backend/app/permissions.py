@@ -27,6 +27,7 @@ PERMISSIONS: tuple[str, ...] = (
     "bgp.lookup",
     "interfaces.view",
     "logs.view",
+    "management.backup",
 )
 
 ALL_PERMISSIONS: FrozenSet[str] = frozenset(PERMISSIONS)

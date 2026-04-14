@@ -14,6 +14,7 @@ import LogPanel from './pages/LogPanel.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import CompaniesPage from './pages/CompaniesPage.jsx'
 import UsersPage from './pages/UsersPage.jsx'
+import ManagementPage from './pages/ManagementPage.jsx'
 import { LogProvider } from './context/LogContext.jsx'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 
@@ -70,6 +71,9 @@ function AppAuthenticated() {
       ]
       if (viewLabel) items.push({ label: viewLabel })
       return items
+    }
+    if (activePage === 'management') {
+      return [{ label: 'Admin' }, { label: 'Gerenciamento' }]
     }
     return [{ label: 'Admin' }]
   }, [activePage, selected])
@@ -133,6 +137,7 @@ function AppAuthenticated() {
           {activePage === 'companies' && hasPermission('companies.view') && <CompaniesPage />}
 
           {activePage === 'users' && hasPermission('users.view') && <UsersPage />}
+          {activePage === 'management' && hasPermission('management.backup') && <ManagementPage />}
 
           {activePage === 'devices' && (
             <div className={showDevicePanel ? 'hidden' : ''}>

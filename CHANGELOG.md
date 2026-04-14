@@ -168,3 +168,13 @@ Formato sugerido:
 - Removidas referências operacionais a `.claude/worktrees/trusting-napier` nos scripts da raiz (`package.json`).
 - `.gitignore` ampliado para excluir artefatos sensíveis e locais (`.claude/`, `.claire/`, `00-Material/`, logs, envs, dist, venv, dbs).
 - Repositório Git local inicializado na raiz `60-BGP_Manager` e commit inicial criado para publicação limpa.
+
+### Gerenciamento (backup/restauração)
+- Nova aba `Gerenciamento` no frontend para:
+  - exportar backup completo do banco em JSON;
+  - importar backup JSON para restaurar ambiente em outro servidor.
+- Novos endpoints backend:
+  - `GET /api/management/backup/export`
+  - `POST /api/management/backup/import`
+- Export/import cobre tabelas do banco via metadados SQLAlchemy (incluindo usuários, empresas, dispositivos e inventário relacionado).
+- Operação restrita a `superadmin` (nova permissão `management.backup` + verificação explícita no backend).

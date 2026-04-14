@@ -9,7 +9,7 @@ from .audit_log import configure_audit_logging
 from .config import settings
 from .database import apply_schema_patches, create_tables
 from .middleware.user_audit_middleware import UserAuditMiddleware
-from .routers import auth, companies, devices, logs, snmp, users
+from .routers import auth, companies, devices, logs, management, snmp, users
 from .services.startup_checks import run_startup_access_checks
 
 
@@ -56,6 +56,7 @@ app.include_router(companies.router)
 app.include_router(devices.router)
 app.include_router(snmp.router)
 app.include_router(logs.router)
+app.include_router(management.router)
 
 
 @app.get("/health")

@@ -7,6 +7,7 @@ import {
   PanelLeftOpen,
   Building2,
   Users,
+  Database,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useLog } from '../context/LogContext.jsx'
@@ -21,6 +22,7 @@ const BASE_NAV = [
 const EXTRA_NAV = [
   { key: 'companies', label: 'Empresas', icon: Building2, perm: 'companies.view' },
   { key: 'users', label: 'Usuários', icon: Users, perm: 'users.view' },
+  { key: 'management', label: 'Gerenciamento', icon: Database, perm: 'management.backup' },
 ]
 
 export default function Sidebar({ activePage, onNavigate, deviceCount }) {
