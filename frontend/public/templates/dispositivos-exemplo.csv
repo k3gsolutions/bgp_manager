@@ -1,0 +1,3 @@
+company_id,client,name,ip_address,ssh_port,vendor,model,username,password,snmp_community,description
+1,,PE-EXEMPLO-01,198.51.100.10,22,Huawei,NE8000,admin,AltereEstaSenha,public,Exemplo — ajuste company_id IP user e senha antes de importar
+1,Ref-B,PE-EXEMPLO-02,198.51.100.11,22,Huawei,NE8000,admin,AltereEstaSenha,public,Segunda linha exemplo (RFC5737 TEST-NET-2)

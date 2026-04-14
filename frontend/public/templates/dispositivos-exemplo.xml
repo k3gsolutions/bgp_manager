@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<devices>
+  <!-- company_id OU company_name (nome exato da empresa no sistema). Obrigatórios: ip_address, username, password -->
+  <device>
+    <company_id>1</company_id>
+    <client></client>
+    <name>PE-EXEMPLO-XML-01</name>
+    <ip_address>198.51.100.20</ip_address>
+    <ssh_port>22</ssh_port>
+    <vendor>Huawei</vendor>
+    <model>NE8000</model>
+    <username>admin</username>
+    <password>AltereEstaSenha</password>
+    <snmp_community>public</snmp_community>
+    <description>Exemplo XML — ajuste dados antes de importar (RFC5737)</description>
+  </device>
+  <device>
+    <company_id>1</company_id>
+    <name>PE-EXEMPLO-XML-02</name>
+    <ip_address>198.51.100.21</ip_address>
+    <ssh_port>22</ssh_port>
+    <vendor>Huawei</vendor>
+    <model>NE8000</model>
+    <username>admin</username>
+    <password>AltereEstaSenha</password>
+    <snmp_community>public</snmp_community>
+    <description>Segundo equipamento de exemplo</description>
+  </device>
+</devices>

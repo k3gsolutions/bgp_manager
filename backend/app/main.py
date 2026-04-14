@@ -1,0 +1,63 @@
+from contextlib import asynccontextmanager
+import asyncio
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .activity_log import configure_activity_logging
+from .audit_log import configure_audit_logging
+from .config import settings
+from .database import apply_schema_patches, create_tables
+from .middleware.user_audit_middleware import UserAuditMiddleware
+from .routers import auth, companies, devices, logs, snmp, users
+from .services.startup_checks import run_startup_access_checks
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    configure_activity_logging()
+    configure_audit_logging()
+    await create_tables()
+    await apply_schema_patches()
+    asyncio.create_task(run_startup_access_checks())
+    yield
+
+
+app = FastAPI(
+    title="BGP Manager API",
+    description="Gerenciamento de dispositivos de rede — Huawei NE8000",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+_cors_base = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://[::1]:5173",
+    "http://[::1]:5174",
+    "http://localhost:3000",
+]
+_cors_extra = [o.strip() for o in settings.cors_extra_origins.split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_base + _cors_extra,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(UserAuditMiddleware)
+
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(companies.router)
+app.include_router(devices.router)
+app.include_router(snmp.router)
+app.include_router(logs.router)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}

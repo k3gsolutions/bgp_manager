@@ -1,0 +1,22 @@
+# PostgreSQL opcional para desenvolvimento. Em produção defina POSTGRES_PASSWORD (e utilizador)
+# no ambiente ou num ficheiro .env ao lado deste ficheiro — nunca commite senhas reais.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bgpmanager-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bgpuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devonly_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-bgpmanager}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bgpuser -d bgpmanager"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

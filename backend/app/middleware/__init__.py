@@ -1,0 +1,1 @@
+"""Middleware da aplicação."""
