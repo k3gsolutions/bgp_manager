@@ -312,7 +312,16 @@ async def bgp_provider_advertised_routes(
         log,
         f"SSH advertised list: peer_id={payload.peer_id} ip={peer.peer_ip!r} vrf={(peer.vrf_name or '')!r} offset={payload.offset}",
     )
-    password = decrypt(device.password_encrypted)
+    try:
+        password = decrypt(device.password_encrypted)
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Não foi possível descriptografar credenciais do dispositivo. "
+                "Configure FERNET_KEY correta no backend para este banco de dados."
+            ),
+        ) from e
     loop = asyncio.get_running_loop()
 
     def _run() -> dict:
@@ -385,7 +394,16 @@ async def bgp_customer_received_routes(
         log,
         f"SSH received list: peer_id={payload.peer_id} ip={peer.peer_ip!r} vrf={(peer.vrf_name or '')!r} offset={payload.offset}",
     )
-    password = decrypt(device.password_encrypted)
+    try:
+        password = decrypt(device.password_encrypted)
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Não foi possível descriptografar credenciais do dispositivo. "
+                "Configure FERNET_KEY correta no backend para este banco de dados."
+            ),
+        ) from e
     loop = asyncio.get_running_loop()
 
     def _run() -> dict:

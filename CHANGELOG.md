@@ -178,3 +178,24 @@ Formato sugerido:
   - `POST /api/management/backup/import`
 - Export/import cobre tabelas do banco via metadados SQLAlchemy (incluindo usuários, empresas, dispositivos e inventário relacionado).
 - Operação restrita a `superadmin` (nova permissão `management.backup` + verificação explícita no backend).
+
+### Gerenciamento (atualização do sistema)
+- Novo mecanismo completo de update na aba `Gerenciamento`:
+  - exibe versão atual instalada, última versão disponível (GitHub/origin) e status;
+  - botão `Verificar atualização`;
+  - botão `Atualizar versão` quando há update disponível;
+  - log de execução por etapas e polling em tempo real.
+- Backend ganhou serviço dedicado `system_update_service` com:
+  - descoberta de versão atual via git local;
+  - consulta de versão remota (tags semânticas e fallback para commit de `origin/main`);
+  - comparação de versões e estado persistente em memória;
+  - lock para impedir atualizações concorrentes;
+  - execução de update por etapas (pull, deps backend/frontend, build, migração e restart opcional);
+  - rollback básico para commit anterior em falhas.
+- Novos endpoints:
+  - `GET /api/management/system-update/status`
+  - `POST /api/management/system-update/check`
+  - `POST /api/management/system-update/run`
+- Configuração opcional adicionada:
+  - `UPDATE_BACKEND_RESTART_CMD`
+  - `UPDATE_FRONTEND_RESTART_CMD`

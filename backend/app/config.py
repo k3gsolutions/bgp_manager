@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Senha inicial do superadmin (seed só cria usuário se ainda não existir nenhum)
     bootstrap_superadmin_username: str = "superadmin"
     bootstrap_superadmin_password: str = ""
+    # Comandos opcionais para restart automático após atualização (executados via bash -lc).
+    update_backend_restart_cmd: str = ""
+    update_frontend_restart_cmd: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import Base, get_db
 from ..deps.auth import CurrentUserCtx, require_permission
+from ..services.system_update_service import system_update_service
 
 router = APIRouter(prefix="/api/management", tags=["management"])
 
@@ -27,6 +28,21 @@ class BackupImportRequest(BaseModel):
 class BackupImportResponse(BaseModel):
     imported_at: str
     table_counts: dict[str, int]
+
+
+class SystemUpdateStatusResponse(BaseModel):
+    current_version: str
+    latest_version: str | None = None
+    latest_source: str | None = None
+    status: str
+    update_available: bool
+    last_checked_at: str | None = None
+    last_run_started_at: str | None = None
+    last_run_finished_at: str | None = None
+    error: str | None = None
+    running: bool
+    restart_required: bool
+    logs: list[str] = Field(default_factory=list)
 
 
 def _ensure_superadmin(user: CurrentUserCtx) -> None:
@@ -144,3 +160,31 @@ async def import_backup(
         imported_at=datetime.utcnow().isoformat() + "Z",
         table_counts=imported_counts,
     )
+
+
+@router.get("/system-update/status", response_model=SystemUpdateStatusResponse)
+async def system_update_status(
+    user: CurrentUserCtx = require_permission("management.backup"),
+):
+    _ensure_superadmin(user)
+    return SystemUpdateStatusResponse.model_validate(system_update_service.status())
+
+
+@router.post("/system-update/check", response_model=SystemUpdateStatusResponse)
+async def system_update_check(
+    user: CurrentUserCtx = require_permission("management.backup"),
+):
+    _ensure_superadmin(user)
+    return SystemUpdateStatusResponse.model_validate(system_update_service.check())
+
+
+@router.post("/system-update/run", response_model=SystemUpdateStatusResponse)
+async def system_update_run(
+    user: CurrentUserCtx = require_permission("management.backup"),
+):
+    _ensure_superadmin(user)
+    try:
+        state = system_update_service.start_update(user.username)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return SystemUpdateStatusResponse.model_validate(state)
