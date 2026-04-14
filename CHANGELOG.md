@@ -122,3 +122,49 @@ Formato sugerido:
 - Expansão/fallback amplo permanece apenas para consultas não explícitas (sem máscara).
 - Lookup passou a considerar peers classificados de todas as classes (`Operadora`, `IX`, `Cliente`, `CDN`) ao montar lista de exportação.
 - Painel de investigação ganhou bloco minimalista de exportação classificada com filtro por papel.
+
+## 2026-04-14
+
+### Frontend (BGP / Equipamentos)
+- AS-Path passou a ser renderizado em badges por ASN (visual semelhante a communities) em:
+  - `BgpLookupPanel`;
+  - `BGPPanel` (modal de rotas anunciadas/recebidas);
+  - `BgpExportLookupModal`.
+- Ajustada marcação do ASN local no AS-Path para usar `local_asn` correto do dispositivo/consulta.
+- Aba `Equipamentos` simplificada para operação SSH:
+  - removidos filtros de tipo (`SSH`, `WEB`, `WinBox`, `RDP`) e lógica associada;
+  - mantida tipagem visual fixa como SSH.
+- Opção de "limpar peers inativos antes da coleta VRP" ficou visível apenas para utilizador `superadmin`.
+
+### Importação em lote de dispositivos
+- Ativado fluxo de importação em batch na aba `Equipamentos` com modal dedicado.
+- Suporte a ficheiros `CSV` e `XML` com parser no frontend (`deviceImportParser`), validação prévia e preview.
+- Inclusos modelos padrão de importação:
+  - `frontend/public/templates/dispositivos-exemplo.csv`
+  - `frontend/public/templates/dispositivos-exemplo.xml`
+- Nova API frontend: `devicesApi.batchCreate(...)`.
+
+### Backend (segurança e robustez)
+- Novo endpoint `POST /api/devices/batch` para criação em lote com:
+  - validação por item (`DeviceCreate`);
+  - retorno estruturado de sucessos/falhas por linha;
+  - isolamento por item (falha de uma linha não desfaz as demais).
+- Endurecimento de autorização:
+  - `POST /api/devices/{id}/maintenance/purge-inactive-bgp-peers` restrito a `superadmin`.
+  - parâmetro `purge_inactive_bgp_first` na coleta SSH é ignorado para não-superadmin (com log explícito).
+- `GET /api/logs/recent` recebeu validação explícita do `limit` (`1..1000`) via `Query`.
+
+### Segurança/configuração para publicação
+- `backend/app/config.py`:
+  - validações estritas para `APP_ENV=production` (exige `JWT_SECRET` forte e `FERNET_KEY`);
+  - default de `DATABASE_URL` para SQLite local (sem credenciais embutidas).
+- `backend/.env.example` revisado com instruções seguras e sem credenciais reais.
+- `docker-compose.yml` atualizado para usar variáveis de ambiente em `POSTGRES_*` (com aviso de uso apenas dev).
+- Novo `SECURITY.md` com política de reporte e recomendações de hardening.
+- `README.md` reescrito para refletir corretamente o projeto e o setup atual.
+
+### Organização de repositório / GitHub
+- Base do projeto sincronizada para a raiz `60-BGP_Manager` (`backend/`, `frontend/`, `docs/`).
+- Removidas referências operacionais a `.claude/worktrees/trusting-napier` nos scripts da raiz (`package.json`).
+- `.gitignore` ampliado para excluir artefatos sensíveis e locais (`.claude/`, `.claire/`, `00-Material/`, logs, envs, dist, venv, dbs).
+- Repositório Git local inicializado na raiz `60-BGP_Manager` e commit inicial criado para publicação limpa.
