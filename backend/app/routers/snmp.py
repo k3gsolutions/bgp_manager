@@ -334,6 +334,7 @@ async def bgp_provider_advertised_routes(
             peer_ip=peer.peer_ip,
             vrf_name=(peer.vrf_name or "").strip(),
             offset=payload.offset,
+            fetch_all=bool(payload.fetch_all),
             log=log,
         )
 
@@ -416,6 +417,7 @@ async def bgp_customer_received_routes(
             peer_ip=peer.peer_ip,
             vrf_name=(peer.vrf_name or "").strip(),
             offset=payload.offset,
+            fetch_all=bool(payload.fetch_all),
             log=log,
         )
 

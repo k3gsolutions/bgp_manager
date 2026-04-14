@@ -5,6 +5,7 @@ Comando base ``received-routes`` (mesmo layout de tabela que ``advertised-routes
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 from ..activity_log import emit
@@ -60,6 +61,7 @@ def run_huawei_customer_peer_received_routes(
     peer_ip: str,
     vrf_name: str,
     offset: int,
+    fetch_all: bool,
     log: list[str],
 ) -> dict[str, Any]:
     from netmiko import ConnectHandler
@@ -124,7 +126,19 @@ def run_huawei_customer_peer_received_routes(
             }
 
         reported_total = _parse_reported_total(raw_list)
-        all_rows = _parse_advertised_routes_table(raw_list)
+        parsed_rows = _parse_advertised_routes_table(raw_list)
+        # Sanitiza para o contrato de UI: apenas Network (prefix) + Path/Ogn (as_path).
+        all_rows: list[dict[str, str]] = []
+        for row in parsed_rows:
+            prefix = (row.get("prefix") or "").strip()
+            if not prefix:
+                continue
+            try:
+                prefix = str(ipaddress.ip_network(prefix, strict=False))
+            except ValueError:
+                continue
+            as_path = " ".join((row.get("as_path") or "").split())
+            all_rows.append({"prefix": prefix, "as_path": as_path})
         n_parsed = len(all_rows)
 
         if reported_total is not None and n_parsed != reported_total:
@@ -151,8 +165,14 @@ def run_huawei_customer_peer_received_routes(
             cap_message = None
 
         n_display = len(rows_for_ui)
-        slice_rows = rows_for_ui[offset : offset + PAGE_SIZE]
-        has_more = offset + len(slice_rows) < n_display
+        if fetch_all:
+            slice_rows = rows_for_ui
+            page_offset = 0
+            has_more = False
+        else:
+            slice_rows = rows_for_ui[offset : offset + PAGE_SIZE]
+            page_offset = offset
+            has_more = offset + len(slice_rows) < n_display
 
         return {
             "too_many": False,
@@ -160,7 +180,7 @@ def run_huawei_customer_peer_received_routes(
             "items": slice_rows,
             "total": n_display,
             "reported_total": reported_total,
-            "offset": offset,
+            "offset": page_offset,
             "page_size": PAGE_SIZE,
             "has_more": has_more,
             "capped": capped,

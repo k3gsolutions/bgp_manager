@@ -11,7 +11,7 @@ export const snmpApi = {
   /** Huawei SSH: prefixos advertidos ao peer Operadora/IX/CDN (20/página; máx. 200 listadas). */
   bgpProviderAdvertisedRoutes: (deviceId, body) =>
     api.post(`/devices/${deviceId}/bgp/provider-advertised-routes`, body).then(r => r.data),
-  /** Huawei SSH: prefixos recebidos do peer Cliente — received-routes (20/página; máx. 100). */
+  /** Huawei SSH: prefixos recebidos do peer Cliente — received-routes (20/página; máx. 200). */
   bgpCustomerReceivedRoutes: (deviceId, body) =>
     api.post(`/devices/${deviceId}/bgp/customer-received-routes`, body).then(r => r.data),
   updatePeerRole: (deviceId, peerId, body) =>

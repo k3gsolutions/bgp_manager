@@ -280,14 +280,14 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
     setAdvKind('provider')
   }
 
-  async function loadPeerRouteList(peer, offset = 0, kind = 'provider') {
+  async function loadPeerRouteList(peer, kind = 'provider') {
     if (kind === 'provider' && !peerShowsAdvertisedRoutes(peer)) return
     if (kind === 'customer' && !peer?.is_customer) return
     setAdvKind(kind)
     setAdvPeer(peer)
     setAdvOpen(true)
     setAdvLoading(true)
-    setAdvOffset(offset)
+    setAdvOffset(0)
     setAdvData(null)
     const label = device.name || device.ip_address
     const advRoleLabel =
@@ -300,8 +300,8 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
     try {
       const res =
         kind === 'provider'
-          ? await snmpApi.bgpProviderAdvertisedRoutes(device.id, { peer_id: peer.id, offset })
-          : await snmpApi.bgpCustomerReceivedRoutes(device.id, { peer_id: peer.id, offset })
+          ? await snmpApi.bgpProviderAdvertisedRoutes(device.id, { peer_id: peer.id, offset: 0, fetch_all: true })
+          : await snmpApi.bgpCustomerReceivedRoutes(device.id, { peer_id: peer.id, offset: 0, fetch_all: true })
       setAdvData(res)
       const trailTitle = kind === 'provider' ? `Trilha SSH — advertised ${peer.peer_ip}` : `Trilha SSH — received ${peer.peer_ip}`
       reportBackendLog(addLog, 'BGP', trailTitle, res.log || [])
@@ -313,14 +313,14 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
         addLog(
           'success',
           'BGP',
-          `${verb}: ${res.items?.length ?? 0} prefixo(s) nesta página (listados até ${res.total ?? 0})`,
+          `${verb}: ${res.items?.length ?? 0} prefixo(s) coletados para paginação local (listados até ${res.total ?? 0})`,
         )
       } else {
         const verb = kind === 'provider' ? 'Advertidos' : 'Recebidos'
         addLog(
           'success',
           'BGP',
-          `${verb}: ${res.items?.length ?? 0} prefixo(s) nesta página (total ${res.total ?? 0})`,
+          `${verb}: ${res.items?.length ?? 0} prefixo(s) coletados para paginação local (total ${res.total ?? 0})`,
         )
       }
     } catch (e) {
@@ -511,7 +511,7 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
                           <button
                             type="button"
                             title="Prefixos advertidos (SSH — Operadora, IX ou CDN)"
-                            onClick={() => loadPeerRouteList(peer, 0, 'provider')}
+                            onClick={() => loadPeerRouteList(peer, 'provider')}
                             disabled={!peer.is_active || (advLoading && advPeer?.id === peer.id)}
                             className="inline-flex items-center justify-center w-6 h-6 rounded border border-[#2b3046] text-ink-muted hover:text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-40"
                           >
@@ -524,7 +524,7 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
                           <button
                             type="button"
                             title="Prefixos recebidos (SSH — received-routes, só Cliente)"
-                            onClick={() => loadPeerRouteList(peer, 0, 'customer')}
+                            onClick={() => loadPeerRouteList(peer, 'customer')}
                             disabled={!peer.is_active || (advLoading && advPeer?.id === peer.id)}
                             className="inline-flex items-center justify-center w-6 h-6 rounded border border-[#2b3046] text-ink-muted hover:text-purple-400 hover:bg-purple-500/10 transition-colors disabled:opacity-40"
                           >
@@ -685,6 +685,14 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
               )}
               {!advLoading && advData?.items?.length > 0 && (
                 <>
+                  {(() => {
+                    const pageSize = advData.page_size || 20
+                    const totalRows = advData.items.length
+                    const pageRows = advData.items.slice(advOffset, advOffset + pageSize)
+                    const hasPrev = advOffset > 0
+                    const hasNext = advOffset + pageRows.length < totalRows
+                    return (
+                      <>
                   <p className="text-[12px] text-ink-secondary font-medium">
                     {advKind === 'provider'
                       ? advData.capped && advData.full_total != null
@@ -696,27 +704,21 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
                   </p>
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-ink-muted">
                     <span>
-                      {advData.offset + 1}–{advData.offset + advData.items.length} de {advData.total}
+                      {totalRows === 0 ? 0 : advOffset + 1}–{advOffset + pageRows.length} de {totalRows}
                     </span>
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        disabled={advData.offset <= 0 || advLoading}
-                        onClick={() =>
-                          loadPeerRouteList(
-                            advPeer,
-                            Math.max(0, advData.offset - (advData.page_size || 20)),
-                            advKind,
-                          )}
+                        disabled={!hasPrev || advLoading}
+                        onClick={() => setAdvOffset(o => Math.max(0, o - pageSize))}
                         className="px-2 py-1 rounded border border-[#252840] text-ink-secondary hover:bg-[#1e2235] disabled:opacity-40 text-[11px]"
                       >
                         Anterior
                       </button>
                       <button
                         type="button"
-                        disabled={!advData.has_more || advLoading}
-                        onClick={() =>
-                          loadPeerRouteList(advPeer, advData.offset + (advData.page_size || 20), advKind)}
+                        disabled={!hasNext || advLoading}
+                        onClick={() => setAdvOffset(o => o + pageSize)}
                         className="px-2 py-1 rounded border border-[#252840] text-ink-secondary hover:bg-[#1e2235] disabled:opacity-40 text-[11px]"
                       >
                         Próxima
@@ -724,9 +726,9 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
                     </div>
                   </div>
                   <div className="rounded-md border border-[#252840] bg-[#0d0f16] px-3 py-2 text-[11px] leading-relaxed text-ink-primary space-y-2">
-                    {advData.items.map((row, i) => (
+                    {pageRows.map((row, i) => (
                       <div
-                        key={`${advData.offset}-${row.prefix}-${i}`}
+                        key={`${advOffset}-${row.prefix}-${i}`}
                         className="flex flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center border-b border-[#1a1d2e] last:border-0 pb-2 last:pb-0"
                       >
                         <span className="font-mono text-ink-primary shrink-0">{row.prefix}</span>
@@ -738,6 +740,9 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
                       </div>
                     ))}
                   </div>
+                      </>
+                    )
+                  })()}
                 </>
               )}
             </div>

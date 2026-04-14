@@ -149,12 +149,21 @@ def _parse_huawei_network_prefixlen_path_ogn(text: str) -> list[dict[str, str]]:
 def _parse_classic_advertised_table_lines(text: str) -> list[dict[str, str]]:
     """Tabela clássica (uma linha por rota, prefixo já em notação CIDR)."""
     rows: list[dict[str, str]] = []
+    path_col_idx: int | None = None
     for line in text.splitlines():
         raw = line.rstrip()
         t = raw.strip()
         if not t or t.startswith("BGP ") or "Local router ID" in t:
             continue
         if _RE_TOTAL_ROUTES.match(t):
+            continue
+        if "Network" in t and "NextHop" in t and "Path/Ogn" in t:
+            # Usa a posição real da coluna Path/Ogn para evitar "capturar"
+            # MED/LocPrf/PrefVal como se fossem AS-PATH.
+            try:
+                path_col_idx = raw.index("Path/Ogn")
+            except ValueError:
+                path_col_idx = None
             continue
         if t.startswith("---") or ("Network" in t and "NextHop" in t):
             continue
@@ -183,8 +192,15 @@ def _parse_classic_advertised_table_lines(text: str) -> list[dict[str, str]]:
         except ValueError:
             continue
 
-        parts = rest.split()
-        as_path = _path_from_attr_tail(parts) or ""
+        as_path = ""
+        if path_col_idx is not None and len(raw) > path_col_idx:
+            col_tail = raw[path_col_idx:].strip()
+            if col_tail.lower().startswith("path/ogn"):
+                col_tail = col_tail[8:].strip()
+            as_path = _normalize_path_ogn_tail(col_tail)
+        if not as_path:
+            parts = rest.split()
+            as_path = _path_from_attr_tail(parts) or ""
         rows.append({"prefix": prefix, "as_path": as_path})
     return rows
 
@@ -212,6 +228,7 @@ def run_huawei_provider_peer_advertised_routes(
     peer_ip: str,
     vrf_name: str,
     offset: int,
+    fetch_all: bool,
     log: list[str],
 ) -> dict[str, Any]:
     from netmiko import ConnectHandler
@@ -303,8 +320,14 @@ def run_huawei_provider_peer_advertised_routes(
             cap_message = None
 
         n_display = len(rows_for_ui)
-        slice_rows = rows_for_ui[offset : offset + PAGE_SIZE]
-        has_more = offset + len(slice_rows) < n_display
+        if fetch_all:
+            slice_rows = rows_for_ui
+            page_offset = 0
+            has_more = False
+        else:
+            slice_rows = rows_for_ui[offset : offset + PAGE_SIZE]
+            page_offset = offset
+            has_more = offset + len(slice_rows) < n_display
 
         return {
             "too_many": False,
@@ -312,7 +335,7 @@ def run_huawei_provider_peer_advertised_routes(
             "items": slice_rows,
             "total": n_display,
             "reported_total": reported_total,
-            "offset": offset,
+            "offset": page_offset,
             "page_size": PAGE_SIZE,
             "has_more": has_more,
             "capped": capped,

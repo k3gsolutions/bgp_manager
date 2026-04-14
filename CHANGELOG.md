@@ -199,3 +199,12 @@ Formato sugerido:
 - Configuração opcional adicionada:
   - `UPDATE_BACKEND_RESTART_CMD`
   - `UPDATE_FRONTEND_RESTART_CMD`
+
+### BGP (received-routes de Cliente)
+- Ajustada sanitização da coleta SSH de rotas recebidas (`customer-received-routes`):
+  - normaliza `prefix` em CIDR válido;
+  - normaliza espaços do `as_path`;
+  - garante retorno apenas com os campos `prefix` (Network) e `as_path` (Path/Ogn) para a UI.
+- Paginação de prefixos no modal BGP passou a funcionar em memória:
+  - primeira consulta coleta até 200 prefixos (`fetch_all=true`);
+  - navegação entre páginas não dispara nova consulta SSH ao equipamento.

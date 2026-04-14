@@ -134,6 +134,10 @@ class BgpProviderAdvertisedRequest(BaseModel):
 
     peer_id: int = Field(..., ge=1)
     offset: int = Field(0, ge=0, description="Paginação: índice inicial (0, 20, 40…).")
+    fetch_all: bool = Field(
+        False,
+        description="Se true, retorna até o limite de exibição (200) numa única consulta para paginação local.",
+    )
 
 
 class BgpProviderAdvertisedItem(BaseModel):
