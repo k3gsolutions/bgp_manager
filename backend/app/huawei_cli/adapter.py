@@ -38,6 +38,88 @@ def _norm_state(state: str | None) -> str:
     return str(state).strip().lower()
 
 
+def _is_ip_token(token: str) -> bool:
+    try:
+        ipaddress.ip_address((token or "").strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _parse_peer_policies_from_running_config(running_config: str) -> dict[tuple[str, str], dict[str, str]]:
+    """
+    Extrai route-policy de peer direto da configuração salva (backup).
+
+    Retorna um mapa:
+      (peer_ip, vrf_name) -> {"route_policy_import": "...", "route_policy_export": "..."}
+
+    Observação: para peers da instância global, ``vrf_name`` é string vazia.
+    """
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    # peer-group -> políticas por contexto de VRF
+    group_policies: dict[tuple[str, str], dict[str, str]] = {}
+    # peer IP -> peer-group por contexto de VRF
+    peer_group_ref: dict[tuple[str, str], str] = {}
+    vrf_ctx = ""
+    # Ex.: peer 2001:db8::1 route-policy C02-IMPORT-IPV6 import
+    rx_peer_pol = re.compile(r"^\s*peer\s+(\S+)\s+route-policy\s+(\S+)\s+(import|export)\b", re.I)
+    rx_peer_group = re.compile(r"^\s*peer\s+(\S+)\s+group\s+(\S+)\b", re.I)
+    rx_vrf = re.compile(r"^\s*ipv(?:4|6)-family\s+vpn-instance\s+(\S+)\s*$", re.I)
+    rx_global_fam = re.compile(r"^\s*ipv(?:4|6)-family\s+\S+", re.I)
+
+    for raw in (running_config or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line == "#":
+            vrf_ctx = ""
+            continue
+        m_vrf = rx_vrf.match(line)
+        if m_vrf:
+            vrf_ctx = (m_vrf.group(1) or "").strip()[:128]
+            continue
+        if rx_global_fam.match(line):
+            vrf_ctx = ""
+            continue
+        m_grp = rx_peer_group.match(line)
+        if m_grp:
+            lhs = (m_grp.group(1) or "").strip()
+            grp = (m_grp.group(2) or "").strip()
+            if _is_ip_token(lhs) and grp:
+                peer_group_ref[(lhs, vrf_ctx)] = grp
+
+        m = rx_peer_pol.match(line)
+        if not m:
+            continue
+        peer_ip = (m.group(1) or "").strip()
+        policy = (m.group(2) or "").strip()
+        direction = (m.group(3) or "").strip().lower()
+        if _is_ip_token(peer_ip):
+            key = (peer_ip, vrf_ctx)
+            row = out.setdefault(key, {})
+        else:
+            gkey = (peer_ip, vrf_ctx)
+            row = group_policies.setdefault(gkey, {})
+        if direction == "import":
+            row["route_policy_import"] = policy
+        elif direction == "export":
+            row["route_policy_export"] = policy
+
+    # Herdança de policies por peer-group para peers sem policy direta
+    for key, grp in peer_group_ref.items():
+        p = out.setdefault(key, {})
+        if p.get("route_policy_import") and p.get("route_policy_export"):
+            continue
+        gp = group_policies.get((grp, key[1])) or group_policies.get((grp, ""))
+        if not gp:
+            continue
+        if not p.get("route_policy_import") and gp.get("route_policy_import"):
+            p["route_policy_import"] = gp["route_policy_import"]
+        if not p.get("route_policy_export") and gp.get("route_policy_export"):
+            p["route_policy_export"] = gp["route_policy_export"]
+    return out
+
+
 def _parse_sys_from_version(version_out: str, device: Device) -> tuple[str, str]:
     name = (device.name or "").strip()
     m_host = re.search(r"\((\S+)\s+uptime\s+is", version_out, re.I)
@@ -111,6 +193,7 @@ def build_inventory_payload_from_cli(
         vrf_sessions.extend(parse_bgp_peers_verbose(output, vrf_name=vrf_nm))
 
     ordered = ipv4_sessions + ipv6_sessions + vrf_sessions
+    policy_from_backup = _parse_peer_policies_from_running_config(raw.get("running_config", ""))
     seen_peer: set[tuple[str, str]] = set()
     peers_out: list[dict] = []
     for s in ordered:
@@ -123,6 +206,16 @@ def build_inventory_payload_from_cli(
             continue
         seen_peer.add(dedupe_key)
         peer_as = s.get("peer_as")
+        # Prioridade: verbose do peer; fallback: backup running-config.
+        p_import = (s.get("route_policy_import") or "").strip()[:512] or None
+        p_export = (s.get("route_policy_export") or "").strip()[:512] or None
+        if not p_import or not p_export:
+            by_cfg = policy_from_backup.get(dedupe_key) or policy_from_backup.get((pip, ""))
+            if by_cfg:
+                if not p_import:
+                    p_import = (by_cfg.get("route_policy_import") or "").strip()[:512] or None
+                if not p_export:
+                    p_export = (by_cfg.get("route_policy_export") or "").strip()[:512] or None
         peers_out.append({
             "peer_ip": pip,
             "remote_as": peer_as,
@@ -135,6 +228,8 @@ def build_inventory_payload_from_cli(
             "in_updates": s.get("received_total_routes"),
             "out_updates": s.get("advertised_total_routes"),
             "uptime_secs": None,
+            "route_policy_import": p_import,
+            "route_policy_export": p_export,
         })
 
     vrfs = parse_vrfs(raw.get("vrfs", ""))

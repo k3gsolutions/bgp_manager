@@ -5,7 +5,15 @@ import axios from 'axios'
  * - Vazio: usa `/api` (Vite dev/preview encaminha para o backend — ver vite.config.js).
  * - Definido: URL absoluta do backend, ex. `http://127.0.0.1:8000` (requer CORS no FastAPI).
  */
-const root = (import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '')
+
+/** Base do host API sem sufixo ``/api`` (evita ``…/api/api`` se ``VITE_API_URL`` já incluir ``/api``). */
+function normalizeApiRoot(raw) {
+  let s = (raw || '').trim().replace(/\/+$/, '')
+  if (/\/api$/i.test(s)) s = s.slice(0, -4).replace(/\/+$/, '')
+  return s
+}
+
+const root = normalizeApiRoot(import.meta.env.VITE_API_URL || '')
 export const apiBaseURL = root ? `${root}/api` : '/api'
 
 export const api = axios.create({ baseURL: apiBaseURL })
@@ -78,9 +86,12 @@ export function formatAxiosError(err) {
   }
   const direct = (import.meta.env.VITE_API_URL || '').trim()
   if (direct) {
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin ? window.location.origin : '(origem desconhecida)'
     return (
-      `sem resposta em ${apiBaseURL} — verifique se o FastAPI está no ar (${direct}). ` +
-      'CORS no backend deve permitir a origem desta página (URL do Vite no navegador), não a URL do API.'
+      `sem resposta em ${apiBaseURL} — verifique se o FastAPI está no ar (${normalizeApiRoot(direct)}). ` +
+      `O navegador envia Origin=${origin} (a página do Vite); o backend tem de autorizar essa origem no CORS. ` +
+      'Em produção use CORS_EXTRA_ORIGINS com essa URL exacta. Para desenvolvimento, pode apagar VITE_API_URL e usar o proxy do Vite (/api).'
     )
   }
   return (

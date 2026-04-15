@@ -14,6 +14,7 @@ napalm-huawei-vrp==1.2.0
 pysnmp==7.1.18
 requests==2.32.3
 httpx==0.27.2
+pytest==8.3.4
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1

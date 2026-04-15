@@ -10,8 +10,17 @@ Formato sugerido:
 
 ## 2026-04-15
 
+### Backend — CORS
+- Ordem dos middlewares: ``UserAuditMiddleware`` primeiro, ``CORSMiddleware`` por último (FastAPI insere no índice 0 — o CORS fica mais externo e trata preflight/cabeçalhos antes do audit).
+- ``allow_origin_regex`` (localhost / RFC1918 + qualquer porta) activo em **todos** os ambientes excepto ``APP_ENV=production``, alinhando ``test``/CI ao comportamento de desenvolvimento. Evita preflight falhar quando o Vite abre por IP da LAN e ``VITE_API_URL=http://127.0.0.1:8000`` (o navegador mostrava «sem resposta»).
+- Testes ``backend/tests/test_cors_preflight.py`` (preflight OPTIONS + GET /health com Origin LAN).
+
+### Frontend — API client
+- ``VITE_API_URL`` com sufixo ``/api`` é normalizado para não gerar ``…/api/api``.
+- Mensagem «sem resposta» com API absoluta inclui o ``Origin`` actual da página e lembra ``CORS_EXTRA_ORIGINS`` em produção ou proxy sem ``VITE_API_URL``.
+
 ### Ferramentas / qualidade
-- ``npm run check`` / ``scripts/check-local.sh``: compileall do backend, ``tools/check_functionality.py`` (TestClient: health, login, me, OpenAPI, companies, devices em SQLite temporário) e ``vite build`` do frontend.
+- ``npm run check`` / ``scripts/check-local.sh``: compileall, ``check_functionality.py``, ``pytest tests`` no backend, e ``vite build`` do frontend.
 - Seed inicial do superadmin: INSERT SQL passa a preencher ``access_all_companies`` (evita NOT NULL em BD novo).
 
 ## 2026-04-14

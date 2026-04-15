@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import asyncio
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..activity_log import emit
 from ..crypto import decrypt
 from ..huawei_cli.adapter import build_inventory_payload_from_cli
 from ..huawei_cli.collector import HuaweiNE8000Collector
-from ..models import Device
+from ..models import Configuration, Device
 from .config_snapshot import persist_running_config_snapshot, running_config_fetch_needed
 from .inventory_persist import persist_inventory_payload
 
@@ -78,6 +79,27 @@ async def persist_huawei_cli_inventory(
         None,
         lambda: _collect_sync(device, include_running_config=fetch_cfg),
     )
+    if not fetch_cfg and not (raw.get("running_config") or "").strip():
+        # Janela horária ativa: reaproveita último backup já salvo para preencher
+        # artefatos estáticos (route-policy por peer/group) sem abrir novo dump completo.
+        q = await db.execute(
+            select(Configuration.config_text)
+            .where(Configuration.device_id == device_id)
+            .order_by(Configuration.collected_at.desc())
+            .limit(1)
+        )
+        prev_cfg = q.scalar_one_or_none()
+        if prev_cfg:
+            raw["running_config"] = prev_cfg
+            emit(
+                log,
+                "Running-config: usando último backup salvo no banco para enriquecer route-policies.",
+            )
+        else:
+            emit(
+                log,
+                "Running-config: sem snapshot prévio no banco para fallback de route-policy.",
+            )
     data = build_inventory_payload_from_cli(raw, vrf_bgp, device)
     out = await persist_inventory_payload(
         db,

@@ -41,11 +41,11 @@ _cors_base = [
 ]
 _cors_extra = [o.strip() for o in settings.cors_extra_origins.split(",") if o.strip()]
 
-# Em desenvolvimento: aceita qualquer porta em localhost / 127.0.0.1 / ::1 e origens típicas na LAN
-# (quando o Vite abre por http://192.168.x.x:5174 ou outra porta). O Origin NUNCA é a URL do API
-# (ex.: :8000) — é sempre a página que está no navegador.
+# Em qualquer ambiente exceto produção: regex para Vite em localhost/127/::1 e IPs RFC1918 com qualquer porta.
+# (VITE_API_URL apontando para :8000 + página em http://192.168.x.x:5174 exige isto no preflight CORS.)
+# Em produção use apenas ``allow_origins`` + ``CORS_EXTRA_ORIGINS`` (lista explícita).
 _cors_origin_regex = None
-if (settings.app_env or "").strip().lower() == "development":
+if (settings.app_env or "").strip().lower() != "production":
     _cors_origin_regex = (
         r"^https?://("
         r"localhost|127\.0\.0\.1|\[::1\]|"
@@ -55,6 +55,9 @@ if (settings.app_env or "").strip().lower() == "development":
         r")(:\d+)?$"
     )
 
+# FastAPI faz ``user_middleware.insert(0, …)``: o **último** ``add_middleware`` fica mais externo.
+# CORS por último processa preflight e anexa cabeçalhos na resposta antes de outros middlewares.
+app.add_middleware(UserAuditMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_base + _cors_extra,
@@ -63,7 +66,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(UserAuditMiddleware)
 
 app.include_router(auth.router)
 app.include_router(users.router)
