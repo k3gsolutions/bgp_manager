@@ -233,31 +233,63 @@ def _route_not_found(out: str) -> bool:
     return any(m in low for m in markers)
 
 
+_ADV_TO_HEADER = re.compile(r"Advertised to such\s+\d+\s+peers\s*:", re.I)
+
+
 def _parse_advertised_to_peers(detail_text: str) -> list[str]:
     """
-    Extrai peers da seção:
+    Extrai peers da seção Huawei:
       Advertised to such XX peers:
          10.0.0.1
          2001:db8::1
-    Aceita IPv4 e IPv6 (uma por linha, texto colado no bloco).
+
+    Não exige linha em branco após a lista (o regex antigo falhava quando o buffer
+    terminava logo após o último IP). Aceita IPv4/IPv6, uma por linha ou na mesma
+    linha após os dois pontos.
     """
     if not detail_text:
         return []
     ips: list[str] = []
-    blocks = re.finditer(r"Advertised to such\s+\d+\s+peers:\s*(.*?)\n\s*\n", detail_text, re.I | re.S)
-    for m in blocks:
-        block = m.group(1)
-        for line in block.splitlines():
-            t = line.strip().rstrip(",").strip()
-            if not t:
-                continue
+    lines = detail_text.replace("\r\n", "\n").split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not _ADV_TO_HEADER.search(line):
+            i += 1
+            continue
+        # IPs opcionais na mesma linha do cabeçalho (ex.: "...peers: 10.0.0.1")
+        if ":" in line:
+            after = line.split(":", 1)[1].strip()
+            for tok in after.split():
+                t = tok.rstrip(",").strip()
+                if not t:
+                    continue
+                try:
+                    ipaddress.ip_address(t)
+                except ValueError:
+                    break
+                if t not in ips:
+                    ips.append(t)
+        i += 1
+        while i < len(lines):
+            stripped = lines[i].strip().rstrip(",").strip()
+            if not stripped:
+                i += 1
+                break
             try:
-                ipaddress.ip_address(t)
+                ipaddress.ip_address(stripped)
             except ValueError:
-                continue
-            if t not in ips:
-                ips.append(t)
+                break
+            if stripped not in ips:
+                ips.append(stripped)
+            i += 1
     return ips
+
+
+def _ssh_text_for_advertised_peers(detail_out: str, basic_out: str) -> str:
+    """Junta passo2 + passo1: o detail muitas vezes não traz 'Advertised to…' (só o resumo)."""
+    parts = [x for x in (detail_out or "", basic_out or "") if x and x.strip()]
+    return "\n".join(parts) if parts else ""
 
 
 def _peer_address_family(peer_ip: str) -> str:
@@ -534,8 +566,8 @@ def _investigate(
             else:
                 from_peer = _step3_peer_verbose(conn, from_peer_ip, log)
 
-        # Passos 5 + 6 — usa "Advertised to such XX peers" (detail ou passo1) e cruza com peers do banco
-        advertised_peer_ips = _parse_advertised_to_peers(detail_out or basic_out)
+        # Passos 5 + 6 — "Advertised to such …" costuma estar só no passo1; o detail pode omitir.
+        advertised_peer_ips = _parse_advertised_to_peers(_ssh_text_for_advertised_peers(detail_out, basic_out))
         ops_by_ip = _operator_peers_by_ip(operator_peers)
         candidate_ips = list(advertised_peer_ips)
         advertised_to: list[dict[str, Any]] = []
