@@ -19,6 +19,34 @@ const STATUS_CFG = {
   unknown: { dot: 'bg-gray-500',   text: 'text-gray-500',   label: 'Unknown' },
 }
 
+function canonicalInterfaceName(name) {
+  let s = String(name || '').trim()
+  let prev = null
+  while (s && s !== prev) {
+    prev = s
+    s = s.replace(/\s*\([^()]*\)\s*$/, '').trim()
+  }
+  return s
+}
+
+function dedupeInterfacesByCanonicalName(rows) {
+  const byBase = new Map()
+  for (const row of rows || []) {
+    const base = canonicalInterfaceName(row?.name)
+    if (!base) continue
+    const cur = byBase.get(base)
+    const rank = x => [
+      x?.is_active ? 1 : 0,
+      String(x?.name || '').trim() === canonicalInterfaceName(x?.name) ? 1 : 0,
+      String(x?.last_updated || ''),
+    ]
+    if (!cur || rank(row).join('|') > rank(cur).join('|')) {
+      byBase.set(base, row)
+    }
+  }
+  return [...byBase.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+}
+
 export default function InterfacesPanel({ device }) {
   const { addLog } = useLog()
   const { hasPermission } = useAuth()
@@ -40,7 +68,8 @@ export default function InterfacesPanel({ device }) {
     }
     try {
       const data = await snmpApi.interfaces(device.id)
-      setInterfaces(prev => (merge ? mergeByStableId(prev, data) : data))
+      const next = dedupeInterfacesByCanonicalName(data)
+      setInterfaces(prev => (merge ? mergeByStableId(prev, next) : next))
     } catch (e) {
       if (!quiet) {
         const msg = e?.response?.data?.detail || 'Erro ao carregar interfaces'

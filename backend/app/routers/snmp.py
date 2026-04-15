@@ -29,6 +29,7 @@ from ..services.bgp_provider_advertised_routes import run_huawei_provider_peer_a
 from ..services.inventory_history import record_bgp_peer_role_change
 from ..services.inventory_persist import is_ibgp_session
 from ..services.route_policy_circuit import circuit_id_from_peer_policies
+from ..services.interface_name import canonical_interface_name
 from ..services.snmp_inventory import persist_snmp_inventory
 from ..services.snmp_status_refresh import persist_snmp_status_refresh
 from ..snmp_collector import async_collect_bgp, async_collect_interfaces
@@ -153,6 +154,35 @@ async def list_interfaces(
         select(Interface).where(Interface.device_id == device_id).order_by(Interface.name)
     )
     interfaces = result.scalars().all()
+
+    # Deduplicação defensiva por nome canônico:
+    # quando coexistirem "IFACE" e "IFACE(...)", mantém só a melhor candidata.
+    by_base: dict[str, Interface] = {}
+    for iface in interfaces:
+        base = canonical_interface_name(iface.name)
+        if not base:
+            continue
+        current = by_base.get(base)
+        if current is None:
+            by_base[base] = iface
+            continue
+
+        def _rank(x: Interface) -> tuple[int, int, str]:
+            exact = 1 if (str(getattr(x, "name", "") or "").strip() == canonical_interface_name(x.name)) else 0
+            active = 1 if bool(getattr(x, "is_active", False)) else 0
+            updated = str(getattr(x, "last_updated", "") or "")
+            # Prioridade: ativo > nome exato > mais recente.
+            return (active, exact, updated)
+
+        if _rank(iface) > _rank(current):
+            by_base[base] = iface
+
+    interfaces = sorted(by_base.values(), key=lambda x: (str(getattr(x, "name", "") or "").lower(), x.id))
+    active_iface_bases = {
+        canonical_interface_name(i.name)
+        for i in interfaces
+        if i.is_active and canonical_interface_name(i.name)
+    }
     peer_res = await db.execute(
         select(BGPPeer).where(BGPPeer.device_id == device_id).order_by(BGPPeer.peer_ip)
     )
@@ -160,6 +190,15 @@ async def list_interfaces(
 
     out = []
     for iface in interfaces:
+        iface_name = str(getattr(iface, "name", "") or "").strip()
+        iface_base = canonical_interface_name(iface_name)
+        # Oculta legados inativos "IFACE(...)" quando o nome-base já existe ativo.
+        if (
+            not iface.is_active
+            and iface_name != iface_base
+            and iface_base in active_iface_bases
+        ):
+            continue
         # Última métrica
         m_result = await db.execute(
             select(InterfaceMetric)
