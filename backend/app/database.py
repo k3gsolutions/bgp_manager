@@ -110,8 +110,8 @@ def _sync_rbac_schema_and_seed(connection, dialect: str) -> None:
                     CREATE TABLE IF NOT EXISTS companies (
                         id SERIAL PRIMARY KEY,
                         name VARCHAR(200) NOT NULL,
-                        created_at TIMESTAMP,
-                        updated_at TIMESTAMP
+                        created_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ
                     )
                     """
                 )
@@ -145,8 +145,8 @@ def _sync_rbac_schema_and_seed(connection, dialect: str) -> None:
                         password_hash VARCHAR(255) NOT NULL,
                         role VARCHAR(32) NOT NULL DEFAULT 'viewer',
                         is_active BOOLEAN NOT NULL DEFAULT true,
-                        created_at TIMESTAMP,
-                        updated_at TIMESTAMP
+                        created_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ
                     )
                     """
                 )
@@ -298,7 +298,7 @@ def _sync_apply_schema_patches(connection) -> None:
                     CREATE TABLE IF NOT EXISTS prefix_lookup_history (
                         id SERIAL PRIMARY KEY,
                         device_id INTEGER NOT NULL REFERENCES devices(id),
-                        created_at TIMESTAMP,
+                        created_at TIMESTAMPTZ,
                         query VARCHAR(200) NOT NULL,
                         normalized_query VARCHAR(200),
                         route_found BOOLEAN NOT NULL DEFAULT false,
@@ -341,7 +341,7 @@ def _sync_apply_schema_patches(connection) -> None:
                     connection.execute(text("ALTER TABLE interfaces ADD COLUMN deactivated_at DATETIME"))
                 else:
                     connection.execute(
-                        text("ALTER TABLE interfaces ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMP NULL")
+                        text("ALTER TABLE interfaces ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ NULL")
                     )
         return
 
@@ -395,7 +395,7 @@ def _sync_apply_schema_patches(connection) -> None:
             connection.execute(text("ALTER TABLE bgp_peers ADD COLUMN deactivated_at DATETIME"))
         else:
             connection.execute(
-                text("ALTER TABLE bgp_peers ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMP NULL")
+                text("ALTER TABLE bgp_peers ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ NULL")
             )
     if "vrf_name" not in peer_cols:
         if dialect == "sqlite":
@@ -503,7 +503,7 @@ def _sync_apply_schema_patches(connection) -> None:
                 connection.execute(text("ALTER TABLE interfaces ADD COLUMN deactivated_at DATETIME"))
             else:
                 connection.execute(
-                    text("ALTER TABLE interfaces ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMP NULL")
+                    text("ALTER TABLE interfaces ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ NULL")
                 )
 
     # Cada dispositivo é uma entidade: interfaces e peers não se misturam entre devices.
@@ -534,6 +534,56 @@ def _sync_apply_schema_patches(connection) -> None:
     )
 
 
+def _sync_postgresql_naive_timestamp_to_timestamptz(connection) -> None:
+    """
+    BDs PostgreSQL antigos (TIMESTAMP sem TZ) falham com datetime timezone-aware do SQLAlchemy.
+    Converte colunas conhecidas para TIMESTAMPTZ; valores naive existentes são tratados como UTC.
+    """
+    if connection.dialect.name != "postgresql":
+        return
+    insp = inspect(connection)
+    pairs = [
+        ("companies", "created_at"),
+        ("companies", "updated_at"),
+        ("users", "created_at"),
+        ("users", "updated_at"),
+        ("devices", "created_at"),
+        ("devices", "updated_at"),
+        ("configurations", "collected_at"),
+        ("interfaces", "deactivated_at"),
+        ("interfaces", "last_updated"),
+        ("interface_metrics", "timestamp"),
+        ("bgp_peers", "deactivated_at"),
+        ("bgp_peers", "last_updated"),
+        ("device_vrfs", "last_seen_at"),
+        ("inventory_history", "created_at"),
+        ("prefix_lookup_history", "created_at"),
+    ]
+    for table, column in pairs:
+        if not insp.has_table(table):
+            continue
+        row = connection.execute(
+            text(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = :t
+                  AND column_name = :c
+                """
+            ),
+            {"t": table, "c": column},
+        ).fetchone()
+        if not row or row[0] != "timestamp without time zone":
+            continue
+        connection.execute(
+            text(
+                f"ALTER TABLE {table} ALTER COLUMN {column} TYPE TIMESTAMPTZ "
+                f"USING {column} AT TIME ZONE 'UTC'"
+            )
+        )
+
+
 async def apply_schema_patches():
     async with engine.begin() as conn:
 
@@ -542,3 +592,4 @@ async def apply_schema_patches():
 
         await conn.run_sync(_rbac)
         await conn.run_sync(_sync_apply_schema_patches)
+        await conn.run_sync(_sync_postgresql_naive_timestamp_to_timestamptz)

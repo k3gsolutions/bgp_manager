@@ -37,8 +37,8 @@ class Company(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     devices: Mapped[list["Device"]] = relationship(back_populates="company")
     users: Mapped[list["User"]] = relationship(secondary=user_company, back_populates="companies")
@@ -54,8 +54,8 @@ class User(Base):
     # True = vê/edita dispositivos de todas as empresas (exceto superadmin, que já tem escopo total).
     access_all_companies: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     companies: Mapped[list[Company]] = relationship(secondary=user_company, back_populates="users")
 
@@ -82,8 +82,8 @@ class Device(Base):
     snmp_community: Mapped[str | None] = mapped_column(String(50), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     local_asn: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     configurations: Mapped[list["Configuration"]] = relationship(
         back_populates="device", cascade="all, delete-orphan"
@@ -112,7 +112,7 @@ class Configuration(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), nullable=False, index=True)
     config_text: Mapped[str] = mapped_column(Text, nullable=False)
-    collected_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Origem da sessão SSH (ex.: ssh_bgp_verbose); dedupe por ``content_sha256``.
     source: Mapped[str] = mapped_column(String(40), nullable=False, default="ssh")
@@ -139,11 +139,11 @@ class Interface(Base):
     netmask: Mapped[str | None] = mapped_column(String(45), nullable=True)
     ipv6_addresses: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     admin_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     speed_mbps: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    last_updated: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     device: Mapped["Device"] = relationship(back_populates="interfaces")
     metrics: Mapped[list["InterfaceMetric"]] = relationship(
@@ -156,7 +156,7 @@ class InterfaceMetric(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     interface_id: Mapped[int] = mapped_column(ForeignKey("interfaces.id"), nullable=False, index=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     in_octets: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     out_octets: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     in_errors: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -193,12 +193,12 @@ class BGPPeer(Base):
     is_cdn: Mapped[bool] = mapped_column(Boolean, default=False)
     is_ibgp: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # True após o peer aparecer em pelo menos uma coleta SNMP/SSH persistida (ou refresh SNMP).
     # Só então sumir do inventário marca is_active=False — evita "Inativo" em linhas nunca confirmadas.
     inventory_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    last_updated: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Preenchidos na coleta quando o SSH `display bgp … peer verbose` está disponível (não vêm do SNMP).
     route_policy_import: Mapped[str | None] = mapped_column(String(512), nullable=True)
     route_policy_export: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -215,7 +215,7 @@ class DeviceVrf(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), nullable=False, index=True)
     vrf_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     device: Mapped["Device"] = relationship(back_populates="device_vrfs")
 
@@ -227,7 +227,7 @@ class InventoryHistory(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     source: Mapped[str] = mapped_column(String(40), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -246,7 +246,7 @@ class PrefixLookupHistory(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     query: Mapped[str] = mapped_column(String(200), nullable=False)
     normalized_query: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     route_found: Mapped[bool] = mapped_column(Boolean, default=False)
