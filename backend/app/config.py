@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # Comandos opcionais para restart automático após atualização (executados via bash -lc).
     update_backend_restart_cmd: str = ""
     update_frontend_restart_cmd: str = ""
+    # Máximo de snapshots ``display current-configuration`` por equipamento (mais antigos apagados).
+    config_snapshot_retention: int = 30
+    # Só voltar a executar ``display current-configuration`` no equipamento após esta janela (horas)
+    # desde o último snapshot gravado — evita coleta a cada consulta SSH.
+    config_snapshot_refresh_hours: float = 1.0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

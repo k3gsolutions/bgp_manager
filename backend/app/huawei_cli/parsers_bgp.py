@@ -60,6 +60,8 @@ def parse_bgp_peers_verbose(output: str, *, vrf_name: str = "") -> list[dict]:
                 "state": None,
                 "received_total_routes": None,
                 "advertised_total_routes": None,
+                "route_policy_import": None,
+                "route_policy_export": None,
                 "vrf_name": vrf_norm,
             }
             continue
@@ -84,6 +86,22 @@ def parse_bgp_peers_verbose(output: str, *, vrf_name: str = "") -> list[dict]:
         m_adv_routes = re.match(r"Advertised total routes:\s+(\d+)", stripped)
         if m_adv_routes:
             current["advertised_total_routes"] = int(m_adv_routes.group(1))
+            continue
+        m_rt_in = re.match(
+            r"Route Policy\s*\(\s*Import\s*\)\s*[：:]\s*(\S+)",
+            stripped,
+            re.IGNORECASE,
+        )
+        if m_rt_in:
+            current["route_policy_import"] = m_rt_in.group(1).strip()
+            continue
+        m_rt_out = re.match(
+            r"Route Policy\s*\(\s*Export\s*\)\s*[：:]\s*(\S+)",
+            stripped,
+            re.IGNORECASE,
+        )
+        if m_rt_out:
+            current["route_policy_export"] = m_rt_out.group(1).strip()
             continue
     if current:
         peers.append(current)

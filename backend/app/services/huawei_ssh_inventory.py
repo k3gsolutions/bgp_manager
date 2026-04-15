@@ -13,6 +13,7 @@ from ..crypto import decrypt
 from ..huawei_cli.adapter import build_inventory_payload_from_cli
 from ..huawei_cli.collector import HuaweiNE8000Collector
 from ..models import Device
+from .config_snapshot import persist_running_config_snapshot, running_config_fetch_needed
 from .inventory_persist import persist_inventory_payload
 
 
@@ -20,7 +21,7 @@ def _is_huawei(device: Device) -> bool:
     return (device.vendor or "").strip().lower() == "huawei"
 
 
-def _collect_sync(device: Device) -> tuple[dict[str, str], dict[str, str]]:
+def _collect_sync(device: Device, *, include_running_config: bool) -> tuple[dict[str, str], dict[str, str]]:
     from netmiko import ConnectHandler
 
     password = decrypt(device.password_encrypted)
@@ -35,7 +36,7 @@ def _collect_sync(device: Device) -> tuple[dict[str, str], dict[str, str]]:
     )
     try:
         collector = HuaweiNE8000Collector(conn)
-        raw = collector.collect_all()
+        raw = collector.collect_all(include_running_config=include_running_config)
         vrf_bgp = collector.collect_bgp_all_vrfs(raw.get("vrfs", ""))
         return raw, vrf_bgp
     finally:
@@ -65,10 +66,20 @@ async def persist_huawei_cli_inventory(
             "Coleta SSH Huawei (VRP): display interface, ip, vpn-instance, bgp peer verbose, VRF BGP...",
         )
 
+    fetch_cfg = await running_config_fetch_needed(db, device_id)
+    if not fetch_cfg:
+        emit(
+            log,
+            "Running-config: último snapshot dentro da janela horária — "
+            "omitindo ``display current-configuration`` nesta sessão SSH.",
+        )
     loop = asyncio.get_running_loop()
-    raw, vrf_bgp = await loop.run_in_executor(None, lambda: _collect_sync(device))
+    raw, vrf_bgp = await loop.run_in_executor(
+        None,
+        lambda: _collect_sync(device, include_running_config=fetch_cfg),
+    )
     data = build_inventory_payload_from_cli(raw, vrf_bgp, device)
-    return await persist_inventory_payload(
+    out = await persist_inventory_payload(
         db,
         device_id,
         device,
@@ -77,3 +88,13 @@ async def persist_huawei_cli_inventory(
         source=source,
         collect_label="SSH Huawei",
     )
+    if fetch_cfg:
+        rc = (raw.get("running_config") or "").strip()
+        if rc:
+            try:
+                await persist_running_config_snapshot(
+                    db, device_id, device, log, rc, source="ssh_huawei_inventory"
+                )
+            except Exception as e:
+                emit(log, f"Snapshot running-config (inventário SSH Huawei) não gravado: {e!s}")
+    return out

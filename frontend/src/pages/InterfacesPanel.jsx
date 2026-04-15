@@ -1,8 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, Loader2, GitBranch, Zap, Trash2 } from 'lucide-react'
 import { snmpApi } from '../api/snmp.js'
+import { useAuth } from '../context/AuthContext.jsx'
 import { useLog } from '../context/LogContext.jsx'
 import { reportBackendLog } from '../utils/reportBackendLog.js'
+import { mergeByStableId } from '../utils/inventoryMerge.js'
+
+/** SNMP leve (status) em background; inventário completo só ao intervalo longo ou botão. */
+const STATUS_REFRESH_MS = 3 * 60 * 1000
+const FULL_COLLECT_BG_MS = 18 * 60 * 1000
+const FIRST_STATUS_DELAY_MS = 900
+const FIRST_FULL_COLLECT_DELAY_MS = 90 * 1000
 
 const STATUS_CFG = {
   up:      { dot: 'bg-green-400 shadow-[0_0_4px_rgba(74,222,128,.5)]', text: 'text-green-400', label: 'Up' },
@@ -11,8 +19,9 @@ const STATUS_CFG = {
   unknown: { dot: 'bg-gray-500',   text: 'text-gray-500',   label: 'Unknown' },
 }
 
-export default function InterfacesPanel({ device, snmpPollTick = 0 }) {
+export default function InterfacesPanel({ device }) {
   const { addLog } = useLog()
+  const { hasPermission } = useAuth()
   const [interfaces, setInterfaces] = useState([])
   const [loading, setLoading] = useState(false)
   const [collecting, setCollecting] = useState(false)
@@ -24,13 +33,14 @@ export default function InterfacesPanel({ device, snmpPollTick = 0 }) {
 
   const load = useCallback(async (opts = {}) => {
     const quiet = opts.quiet === true
+    const merge = opts.merge === true
     if (!quiet) {
       setLoading(true)
       setError(null)
     }
     try {
       const data = await snmpApi.interfaces(device.id)
-      setInterfaces(data)
+      setInterfaces(prev => (merge ? mergeByStableId(prev, data) : data))
     } catch (e) {
       if (!quiet) {
         const msg = e?.response?.data?.detail || 'Erro ao carregar interfaces'
@@ -46,9 +56,67 @@ export default function InterfacesPanel({ device, snmpPollTick = 0 }) {
     load()
   }, [load])
 
+  /** SNMP em segundo plano: status-refresh (leve) + coleta completa rara; lista vem sempre do BD. */
   useEffect(() => {
-    if (snmpPollTick > 0) load({ quiet: true })
-  }, [snmpPollTick, load])
+    if (!device.snmp_community) return undefined
+    const canRefresh = hasPermission('devices.snmp_refresh')
+    const canCollect = hasPermission('devices.snmp_collect')
+    if (!canRefresh && !canCollect) return undefined
+    let cancelled = false
+
+    const runStatus = async () => {
+      if (!canRefresh || cancelled || document.visibilityState === 'hidden') return
+      try {
+        await snmpApi.statusRefresh(device.id)
+        if (cancelled) return
+        await load({ quiet: true, merge: true })
+      } catch {
+        /* silencioso em background */
+      }
+    }
+
+    const runFull = async () => {
+      if (!canCollect || cancelled || document.visibilityState === 'hidden') return
+      try {
+        const info = await snmpApi.collect(device.id)
+        if (cancelled) return
+        reportBackendLog(addLog, 'SNMP', 'Coleta SNMP (fundo) — interfaces', info.log)
+        setCollectInfo(info)
+        await load({ quiet: true, merge: false })
+      } catch {
+        /* silencioso */
+      }
+    }
+
+    const tStatus = canRefresh
+      ? window.setTimeout(() => {
+          void runStatus()
+        }, FIRST_STATUS_DELAY_MS)
+      : null
+    const iStatus = canRefresh
+      ? window.setInterval(() => {
+          void runStatus()
+        }, STATUS_REFRESH_MS)
+      : null
+    const tFull = canCollect
+      ? window.setTimeout(() => {
+          void runFull()
+        }, FIRST_FULL_COLLECT_DELAY_MS)
+      : null
+    const iFull = canCollect
+      ? window.setInterval(() => {
+          void runFull()
+        }, FULL_COLLECT_BG_MS)
+      : null
+
+    return () => {
+      cancelled = true
+      if (tStatus != null) window.clearTimeout(tStatus)
+      if (iStatus != null) window.clearInterval(iStatus)
+      if (tFull != null) window.clearTimeout(tFull)
+      if (iFull != null) window.clearInterval(iFull)
+    }
+  }, [device.id, device.snmp_community, load, addLog, hasPermission])
 
   async function handleCollect() {
     if (!device.snmp_community) {
@@ -68,7 +136,7 @@ export default function InterfacesPanel({ device, snmpPollTick = 0 }) {
         `Coleta OK: ${info.interface_count} interfaces, ${info.bgp_peer_count} peers BGP, IPv6=${info.ipv6_address_count ?? 0} (${info.ipv6_source || 'snmp'})`,
       )
       setCollectInfo(info)
-      await load()
+      await load({ merge: false })
     } catch (e) {
       const msg = e?.response?.data?.detail || 'Erro na coleta SNMP'
       setError(msg)

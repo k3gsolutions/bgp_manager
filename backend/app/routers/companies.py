@@ -30,11 +30,6 @@ async def create_company(
     db: AsyncSession = Depends(get_db),
     user: CurrentUserCtx = require_permission("companies.create"),
 ):
-    if not user.is_superadmin():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Apenas superadmin pode criar empresas.",
-        )
     row = Company(name=payload.name.strip())
     db.add(row)
     await db.flush()
@@ -82,8 +77,6 @@ async def delete_company(
     db: AsyncSession = Depends(get_db),
     user: CurrentUserCtx = require_permission("companies.delete"),
 ):
-    if not user.is_superadmin():
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Apenas superadmin pode excluir empresas.")
     result = await db.execute(select(Company).where(Company.id == company_id))
     row = result.scalar_one_or_none()
     if row is None:

@@ -156,6 +156,16 @@ async def persist_inventory_payload(
         seen.add((ip, vrf))
         remote_asn = peer.get("remote_as")
         ibgp = is_ibgp_session(local_as, remote_asn)
+        rpi = peer.get("route_policy_import")
+        rpe = peer.get("route_policy_export")
+        if isinstance(rpi, str):
+            rpi = rpi.strip()[:512] or None
+        else:
+            rpi = None
+        if isinstance(rpe, str):
+            rpe = rpe.strip()[:512] or None
+        else:
+            rpe = None
         if (ip, vrf) in existing:
             p = existing[(ip, vrf)]
             p.remote_asn = remote_asn
@@ -169,6 +179,10 @@ async def persist_inventory_payload(
             p.deactivated_at = None
             p.last_updated = _now()
             p.inventory_confirmed = True
+            if rpi is not None:
+                p.route_policy_import = rpi
+            if rpe is not None:
+                p.route_policy_export = rpe
         else:
             db.add(
                 BGPPeer(
@@ -190,6 +204,8 @@ async def persist_inventory_payload(
                     deactivated_at=None,
                     inventory_confirmed=True,
                     last_updated=_now(),
+                    route_policy_import=rpi,
+                    route_policy_export=rpe,
                 )
             )
 

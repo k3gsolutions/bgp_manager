@@ -28,6 +28,7 @@ from ..services.bgp_peer_resolve import resolve_peer_local_and_name
 from ..services.bgp_provider_advertised_routes import run_huawei_provider_peer_advertised_routes
 from ..services.inventory_history import record_bgp_peer_role_change
 from ..services.inventory_persist import is_ibgp_session
+from ..services.route_policy_circuit import circuit_id_from_peer_policies
 from ..services.snmp_inventory import persist_snmp_inventory
 from ..services.snmp_status_refresh import persist_snmp_status_refresh
 from ..snmp_collector import async_collect_bgp, async_collect_interfaces
@@ -42,6 +43,24 @@ def _now() -> datetime:
 # ── Helpers ────────────────────────────────────────────────────────────────
 async def _get_device(device_id: int, db: AsyncSession, user: CurrentUserCtx) -> Device:
     return await get_device_for_user(device_id, db, user)
+
+
+def _bgp_peer_row_display_name(p: BGPPeer, peer_name: str | None) -> str:
+    """
+    Coluna NOME na aba BGP: para Operadora/IX/CDN, prefixa ``Cxx-`` ao nome já resolvido
+    (interfaces) quando o ID de circuito é único nas route-policies import/export.
+    """
+    base = (peer_name or "").strip()
+    if not (p.is_provider or p.is_ix or p.is_cdn):
+        return base or "—"
+    cid = circuit_id_from_peer_policies(
+        getattr(p, "route_policy_import", None),
+        getattr(p, "route_policy_export", None),
+    )
+    if not cid:
+        return base or "—"
+    tail = base or (p.peer_ip or "").strip() or "—"
+    return f"C{cid}-{tail}"
 
 
 # ── Coleta completa (interfaces + BGP + VRFs) ──────────────────────────────
@@ -252,6 +271,9 @@ async def list_bgp_peers(
             "remote_asn": p.remote_asn,
             "local_addr": local_addr,
             "peer_name": peer_name,
+            "peer_display_name": _bgp_peer_row_display_name(p, peer_name),
+            "route_policy_import": getattr(p, "route_policy_import", None),
+            "route_policy_export": getattr(p, "route_policy_export", None),
             "in_updates": p.in_updates,
             "out_updates": p.out_updates,
             "uptime_secs": p.uptime_secs,
@@ -536,10 +558,20 @@ async def patch_bgp_peer_role(
     peer.is_cdn = payload.is_cdn
     await db.flush()
     await db.refresh(peer)
+    iface_res = await db.execute(
+        select(Interface).where(Interface.device_id == device_id, Interface.is_active.is_(True))
+    )
+    interfaces = list(iface_res.scalars().all())
+    local_addr, peer_name = resolve_peer_local_and_name(peer.peer_ip, peer.local_addr, interfaces)
     return {
         "id": peer.id,
         "peer_ip": peer.peer_ip,
         "vrf_name": (getattr(peer, "vrf_name", None) or "").strip(),
+        "local_addr": local_addr,
+        "peer_name": peer_name,
+        "peer_display_name": _bgp_peer_row_display_name(peer, peer_name),
+        "route_policy_import": getattr(peer, "route_policy_import", None),
+        "route_policy_export": getattr(peer, "route_policy_export", None),
         "is_customer": peer.is_customer,
         "is_provider": peer.is_provider,
         "is_ix": peer.is_ix,

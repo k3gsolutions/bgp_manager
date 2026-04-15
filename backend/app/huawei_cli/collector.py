@@ -8,9 +8,10 @@ import re
 
 
 class HuaweiNE8000Collector:
+    # ``running_config`` primeiro: fotografia antes dos demais ``display`` na mesma sessão SSH.
     COMMANDS = {
-        "version": "display version",
         "running_config": "display current-configuration",
+        "version": "display version",
         "interfaces_brief": "display interface brief",
         "interfaces_desc": "display interface description",
         "ip_interfaces": "display ip interface brief",
@@ -56,9 +57,12 @@ class HuaweiNE8000Collector:
                     vrfs.add(name)
         return list(vrfs)
 
-    def collect_all(self) -> dict[str, str]:
+    def collect_all(self, *, include_running_config: bool = True) -> dict[str, str]:
         raw: dict[str, str] = {}
         for name, cmd in self.COMMANDS.items():
+            if name == "running_config" and not include_running_config:
+                raw[name] = ""
+                continue
             # running-config pode ser muito grande em NE8000
             to = 300 if name == "running_config" else 120
             raw[name] = self._cmd(cmd, timeout=to)

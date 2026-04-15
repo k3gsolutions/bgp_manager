@@ -41,9 +41,24 @@ _cors_base = [
 ]
 _cors_extra = [o.strip() for o in settings.cors_extra_origins.split(",") if o.strip()]
 
+# Em desenvolvimento: aceita qualquer porta em localhost / 127.0.0.1 / ::1 e origens típicas na LAN
+# (quando o Vite abre por http://192.168.x.x:5174 ou outra porta). O Origin NUNCA é a URL do API
+# (ex.: :8000) — é sempre a página que está no navegador.
+_cors_origin_regex = None
+if (settings.app_env or "").strip().lower() == "development":
+    _cors_origin_regex = (
+        r"^https?://("
+        r"localhost|127\.0\.0\.1|\[::1\]|"
+        r"192\.168\.\d{1,3}\.\d{1,3}|"
+        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+        r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}"
+        r")(:\d+)?$"
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_base + _cors_extra,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

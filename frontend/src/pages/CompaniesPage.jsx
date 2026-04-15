@@ -9,7 +9,9 @@ export default function CompaniesPage() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
+  const [ok, setOk] = useState('')
   const [name, setName] = useState('')
+  const [showCreateModal, setShowCreateModal] = useState(false)
 
   const load = useCallback(async () => {
     setErr('')
@@ -32,10 +34,14 @@ export default function CompaniesPage() {
     e.preventDefault()
     if (!name.trim()) return
     try {
+      setErr('')
       await companiesApi.create({ name: name.trim() })
+      setOk('Empresa criada com sucesso.')
       setName('')
+      setShowCreateModal(false)
       await load()
     } catch (ex) {
+      setOk('')
       setErr(formatAxiosError(ex))
     }
   }
@@ -58,31 +64,73 @@ export default function CompaniesPage() {
       <div className="flex items-center gap-2">
         <Building2 size={18} className="text-ink-secondary" />
         <h1 className="text-[18px] font-bold text-ink-primary">Empresas</h1>
+        {canCreate && (
+          <button
+            type="button"
+            onClick={() => {
+              setErr('')
+              setOk('')
+              setName('')
+              setShowCreateModal(true)
+            }}
+            className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-brand-blue text-white text-[12px] font-semibold"
+          >
+            <Plus size={14} />
+            Criar
+          </button>
+        )}
       </div>
       {err && (
         <div className="text-[12px] text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
           {err}
         </div>
       )}
-      {canCreate && (
-        <form onSubmit={handleCreate} className="flex gap-2 items-end flex-wrap">
-          <div>
-            <label className="block text-[10px] text-ink-muted mb-0.5">Nova empresa</label>
+      {ok && (
+        <div className="text-[12px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/25 rounded-lg px-3 py-2">
+          {ok}
+        </div>
+      )}
+      {canCreate && showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <form
+            onSubmit={handleCreate}
+            className="w-full max-w-md rounded-xl border border-[#252840] bg-[#11131a] p-4 space-y-3 shadow-2xl"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-[14px] font-semibold text-ink-primary">Nova empresa</h2>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="text-[11px] text-ink-muted hover:text-ink-primary"
+              >
+                Fechar
+              </button>
+            </div>
             <input
+              autoFocus
               value={name}
               onChange={e => setName(e.target.value)}
-              className="bg-[#161922] border border-[#252840] rounded-lg px-3 py-1.5 text-[12px] text-ink-primary w-64"
-              placeholder="Nome"
+              className="w-full bg-[#161922] border border-[#252840] rounded-lg px-3 py-2 text-[12px] text-ink-primary"
+              placeholder="Nome da empresa"
             />
-          </div>
-          <button
-            type="submit"
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-brand-blue text-white text-[12px] font-semibold"
-          >
-            <Plus size={14} />
-            Criar
-          </button>
-        </form>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="px-3 py-1.5 rounded-lg border border-[#252840] text-[12px] text-ink-secondary"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-brand-blue text-white text-[12px] font-semibold"
+              >
+                <Plus size={14} />
+                Criar
+              </button>
+            </div>
+          </form>
+        </div>
       )}
       {loading ? (
         <div className="flex items-center gap-2 text-ink-muted py-8">

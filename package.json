@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "install:frontend": "npm install --prefix frontend",
+    "check": "bash scripts/check-local.sh",
     "dev": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
     "preview": "npm --prefix frontend run preview"

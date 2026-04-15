@@ -33,6 +33,17 @@ export function LogProvider({ children }) {
   )
 }
 
+/** Fallback evita crash se algum componente usar fora do LogProvider (ex.: reordenação de árvore). */
 export function useLog() {
-  return useContext(LogContext)
+  const ctx = useContext(LogContext)
+  if (!ctx) {
+    return {
+      entries: [],
+      unread: 0,
+      addLog: () => {},
+      clearUnread: () => {},
+      clearAll: () => {},
+    }
+  }
+  return ctx
 }

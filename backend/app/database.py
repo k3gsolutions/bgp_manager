@@ -245,16 +245,16 @@ def _sync_rbac_schema_and_seed(connection, dialect: str) -> None:
             if dialect == "sqlite":
                 connection.execute(
                     text(
-                        "INSERT INTO users (username, password_hash, role, is_active, created_at, updated_at) "
-                        "VALUES (:u, :h, 'superadmin', 1, datetime('now'), datetime('now'))"
+                        "INSERT INTO users (username, password_hash, role, access_all_companies, is_active, created_at, updated_at) "
+                        "VALUES (:u, :h, 'superadmin', 1, 1, datetime('now'), datetime('now'))"
                     ),
                     {"u": un, "h": h},
                 )
             else:
                 connection.execute(
                     text(
-                        "INSERT INTO users (username, password_hash, role, is_active, created_at, updated_at) "
-                        "VALUES (:u, :h, 'superadmin', true, NOW(), NOW())"
+                        "INSERT INTO users (username, password_hash, role, access_all_companies, is_active, created_at, updated_at) "
+                        "VALUES (:u, :h, 'superadmin', true, true, NOW(), NOW())"
                     ),
                     {"u": un, "h": h},
                 )
@@ -425,6 +425,62 @@ def _sync_apply_schema_patches(connection) -> None:
         connection.execute(
             text("UPDATE bgp_peers SET inventory_confirmed = 1 WHERE is_active = 0")
         )
+    if "route_policy_import" not in peer_cols:
+        if dialect == "sqlite":
+            connection.execute(
+                text("ALTER TABLE bgp_peers ADD COLUMN route_policy_import VARCHAR(512)")
+            )
+        else:
+            connection.execute(
+                text(
+                    "ALTER TABLE bgp_peers ADD COLUMN IF NOT EXISTS route_policy_import VARCHAR(512)"
+                )
+            )
+    if "route_policy_export" not in peer_cols:
+        if dialect == "sqlite":
+            connection.execute(
+                text("ALTER TABLE bgp_peers ADD COLUMN route_policy_export VARCHAR(512)")
+            )
+        else:
+            connection.execute(
+                text(
+                    "ALTER TABLE bgp_peers ADD COLUMN IF NOT EXISTS route_policy_export VARCHAR(512)"
+                )
+            )
+
+    if insp.has_table("configurations"):
+        cfg_cols = {c["name"] for c in insp.get_columns("configurations")}
+        if "source" not in cfg_cols:
+            if dialect == "sqlite":
+                connection.execute(
+                    text(
+                        "ALTER TABLE configurations ADD COLUMN source VARCHAR(40) NOT NULL DEFAULT 'ssh'"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE configurations ADD COLUMN IF NOT EXISTS source VARCHAR(40) NOT NULL DEFAULT 'ssh'"
+                    )
+                )
+        if "content_sha256" not in cfg_cols:
+            if dialect == "sqlite":
+                connection.execute(
+                    text("ALTER TABLE configurations ADD COLUMN content_sha256 VARCHAR(64)")
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE configurations ADD COLUMN IF NOT EXISTS content_sha256 VARCHAR(64)"
+                    )
+                )
+        if "byte_size" not in cfg_cols:
+            if dialect == "sqlite":
+                connection.execute(text("ALTER TABLE configurations ADD COLUMN byte_size INTEGER"))
+            else:
+                connection.execute(
+                    text("ALTER TABLE configurations ADD COLUMN IF NOT EXISTS byte_size INTEGER")
+                )
 
     if insp.has_table("interfaces"):
         iface_cols = {c["name"] for c in insp.get_columns("interfaces")}

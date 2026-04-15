@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
-import { snmpApi } from './api/snmp.js'
 import Sidebar from './components/Sidebar.jsx'
 import Header from './components/Header.jsx'
 import DeviceTree from './components/DeviceTree.jsx'
@@ -18,9 +17,6 @@ import ManagementPage from './pages/ManagementPage.jsx'
 import { LogProvider } from './context/LogContext.jsx'
 import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 
-const SNMP_FULL_MS = 5 * 60 * 1000
-const SNMP_FULL_INITIAL_DELAY_MS = 900
-
 function AppAuthenticated() {
   const { hasPermission } = useAuth()
   const [activePage, setActivePage] = useState('devices')
@@ -28,7 +24,6 @@ function AppAuthenticated() {
   const [devices, setDevices] = useState([])
   const [selected, setSelected] = useState(null)
   const [showModal, setShowModal] = useState(false)
-  const [snmpPollTick, setSnmpPollTick] = useState(0)
 
   const handleDeviceCountChange = useCallback((count, deviceList) => {
     setDeviceCount(count)
@@ -81,32 +76,6 @@ function AppAuthenticated() {
   const showTree = activePage === 'devices'
   const showDevicePanel = activePage === 'devices' && selected
 
-  useEffect(() => {
-    const d = selected?.device
-    if (!showDevicePanel || !d?.snmp_community) return undefined
-
-    let cancelled = false
-    const bump = () => {
-      if (!cancelled) setSnmpPollTick(t => t + 1)
-    }
-
-    const runFull = () => {
-      snmpApi.collect(d.id).then(bump).catch(() => {})
-    }
-
-    const tInitial = window.setTimeout(() => {
-      if (!cancelled) runFull()
-    }, SNMP_FULL_INITIAL_DELAY_MS)
-
-    const tFull = window.setInterval(runFull, SNMP_FULL_MS)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(tInitial)
-      window.clearInterval(tFull)
-    }
-  }, [showDevicePanel, selected?.device?.id, selected?.device?.snmp_community])
-
   return (
     <div className="flex min-h-screen bg-[#0f111a]">
       <Sidebar
@@ -153,10 +122,10 @@ function AppAuthenticated() {
             <BgpLookupPanel device={selected.device} />
           )}
           {showDevicePanel && selected.view === 'interfaces' && (
-            <InterfacesPanel device={selected.device} snmpPollTick={snmpPollTick} />
+            <InterfacesPanel device={selected.device} />
           )}
           {showDevicePanel && selected.view === 'bgp' && (
-            <BGPPanel device={selected.device} snmpPollTick={snmpPollTick} />
+            <BGPPanel device={selected.device} />
           )}
           {showDevicePanel && selected.view === 'filtros' && (
             <FiltrosPanel device={selected.device} />

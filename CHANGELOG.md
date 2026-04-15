@@ -8,6 +8,42 @@ Formato sugerido:
 - resumo do que mudou
 - impacto operacional (quando aplicável)
 
+## 2026-04-15
+
+### Ferramentas / qualidade
+- ``npm run check`` / ``scripts/check-local.sh``: compileall do backend, ``tools/check_functionality.py`` (TestClient: health, login, me, OpenAPI, companies, devices em SQLite temporário) e ``vite build`` do frontend.
+- Seed inicial do superadmin: INSERT SQL passa a preencher ``access_all_companies`` (evita NOT NULL em BD novo).
+
+## 2026-04-14
+
+### Backend — route-policy / circuito
+- Novo módulo `app/services/route_policy_circuit.py`: documenta modelos de nome (`C02-TIM-EXPORT`, `C03-IMPORT-IPV4`, etc.), `extract_circuit_id`, `parse_route_policy_circuit` (operadora opcional + função) e `circuit_id_from_peer_policies` (import/export coerentes).
+- Tabela `bgp_peers`: colunas `route_policy_import` / `route_policy_export`; preenchidas na coleta a partir do parser de `display bgp … peer verbose` (SSH); `GET …/bgp-peers` expõe `peer_display_name` e as policies.
+
+### Backend — snapshots running-config
+- Tabela `configurations`: colunas `source`, `content_sha256`, `byte_size`; retenção configurável (`config_snapshot_retention` / `CONFIG_SNAPSHOT_RETENTION`, padrão 30).
+- `display current-configuration` **só** quando passou a janela `config_snapshot_refresh_hours` (padrão 1h, `CONFIG_SNAPSHOT_REFRESH_HOURS`) desde o último snapshot; nessa consulta corre antes dos outros `display` na mesma sessão. Dentro da janela: mesmo hash não duplica; após a janela grava nova linha mesmo com config idêntica. Serviço `app/services/config_snapshot.py` (`running_config_fetch_needed`).
+
+### Backend — CORS (desenvolvimento)
+- Com `APP_ENV=development`, uso de `allow_origin_regex` no FastAPI para aceitar origens do Vite em **qualquer porta** em `localhost` / `127.0.0.1` / `::1` e em **redes privadas** comuns (LAN), evitando falhas de preflight quando `VITE_API_URL` aponta para `http://127.0.0.1:8000`.
+
+### Frontend — Interfaces / BGP (carga)
+- Abertura das abas **Interfaces** e **BGP**: primeiro pedido é só **GET do banco** (dados já persistidos); removido o `snmp/collect` automático global no `App.jsx` (antes a cada ~5 min ao ver o equipamento).
+- **SNMP em segundo plano** só dentro de cada painel (com permissão): `status-refresh` a cada **3 min** (aba visível) e **coleta completa** em fundo a cada **18 min** (primeira após **~90 s**), sem bloquear a lista.
+- Após `status-refresh` + releitura do BD: **merge por `id`** quando o conjunto de linhas é o mesmo (só atualiza campos); se houver **adição/remoção** de interfaces ou peers, substitui a lista vinda do BD.
+
+### Frontend — carregamento / diagnóstico
+- `GET /auth/me` e `POST /auth/login` com **timeout** (evita spinner infinito se o backend não responder).
+- `useLog()` com **fallback seguro** fora do `LogProvider` (evita crash por contexto nulo).
+- **`RootErrorBoundary`**: em erro de render, mostra mensagem em vez de tela em branco.
+
+### Frontend — BGP Peers
+- Coluna **NOME**: `peer_display_name` da API — para Operadora/IX/CDN, prefixo **`Cxx-`** ao nome já resolvido por interface quando o ID de circuito é inferido das route-policies (coleta SSH verbose).
+- Modal de informações do peer: **route-policy import/export** (mesma origem SSH) e nota sobre limites do SNMP vs. backup offline de `running-config`.
+- Filtros de **Estado** e **Papel** passam a aceitar **múltipla seleção** (alternar botões); **Todos** limpa o filtro daquele grupo (mostra todos).
+- Persistência dos filtros por equipamento na sessão (`filterStates` / `filterRoles`; migração automática dos valores antigos `filterState` / `filterRole`).
+- Comparação de **estado BGP** normalizada em minúsculas (compatível com respostas mistas).
+
 ## 2026-04-13
 
 ### Segurança multiempresa (RBAC)

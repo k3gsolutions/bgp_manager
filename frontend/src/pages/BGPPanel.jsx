@@ -2,10 +2,17 @@ import { useState, useEffect, useCallback, useLayoutEffect } from 'react'
 import { Network, Loader2, Zap, RefreshCw, Trash2, Info, ListTree, Inbox } from 'lucide-react'
 import { AsPathTokens } from '../components/AsPathTokens.jsx'
 import { snmpApi } from '../api/snmp.js'
+import { useAuth } from '../context/AuthContext.jsx'
 import { useLog } from '../context/LogContext.jsx'
 import { reportBackendLog } from '../utils/reportBackendLog.js'
+import { mergeByStableId } from '../utils/inventoryMerge.js'
 
-/** Filtros BGP (busca, estado, papel, iBGP) por device.id — sobrevive à troca de equipamento na sessão */
+const STATUS_REFRESH_MS = 3 * 60 * 1000
+const FULL_COLLECT_BG_MS = 18 * 60 * 1000
+const FIRST_STATUS_DELAY_MS = 900
+const FIRST_FULL_COLLECT_DELAY_MS = 90 * 1000
+
+/** Filtros BGP (busca, estados[], papéis[], iBGP) por device.id — sobrevive à troca de equipamento na sessão */
 const bgpPanelFilterByDeviceId = new Map()
 
 const STATE_CFG = {
@@ -54,18 +61,34 @@ function advertisedRoutesModalTitle(peer) {
   return `Prefixos advertidos (SSH) — ${peerRoleLabel(peerRoleKey(peer))}`
 }
 
-export default function BGPPanel({ device, snmpPollTick = 0 }) {
+/** Nome na tabela: backend envia `peer_display_name` (Cxx-… para Operadora/IX/CDN). */
+function peerTableDisplayName(peer) {
+  if (peer?.peer_display_name != null && String(peer.peer_display_name).trim()) {
+    return String(peer.peer_display_name).trim()
+  }
+  return peer?.peer_name || '—'
+}
+
+function peerInfoModalTitle(peer) {
+  if (!peer) return ''
+  const name = peerTableDisplayName(peer)
+  return `AS${peer.remote_asn ?? '—'}-${name}`
+}
+
+export default function BGPPanel({ device }) {
   const { addLog } = useLog()
+  const { hasPermission } = useAuth()
   const [peers, setPeers] = useState([])
   const [loading, setLoading] = useState(false)
   const [collecting, setCollecting] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
-  const [filterState, setFilterState] = useState('all')
+  /** Vazio = todos os estados; senão o peer precisa estar em um dos selecionados */
+  const [filterStates, setFilterStates] = useState([])
   /** Padrão: só eBGP; marcado inclui iBGP na lista */
   const [includeIbgp, setIncludeIbgp] = useState(false)
-  /** Papel: all | customer | provider | ix | cdn */
-  const [filterRole, setFilterRole] = useState('all')
+  /** Vazio = todos os papéis; senão o peer precisa ter um dos papéis selecionados */
+  const [filterRoles, setFilterRoles] = useState([])
   const [roleSavingId, setRoleSavingId] = useState(null)
   const [deactivatingPeerId, setDeactivatingPeerId] = useState(null)
   const [peerInfoOpen, setPeerInfoOpen] = useState(false)
@@ -82,13 +105,14 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
 
   const load = useCallback(async (opts = {}) => {
     const quiet = opts.quiet === true
+    const merge = opts.merge === true
     if (!quiet) {
       setLoading(true)
       setError(null)
     }
     try {
       const data = await snmpApi.bgpPeers(device.id)
-      setPeers(data)
+      setPeers(prev => (merge ? mergeByStableId(prev, data) : data))
     } catch (e) {
       if (!quiet) {
         const msg = e?.response?.data?.detail || 'Erro ao carregar peers BGP'
@@ -100,24 +124,99 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
     }
   }, [device.id, addLog])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+  }, [load])
 
   useEffect(() => {
-    if (snmpPollTick > 0) load({ quiet: true })
-  }, [snmpPollTick, load])
+    if (!device.snmp_community) return undefined
+    const canRefresh = hasPermission('devices.snmp_refresh')
+    const canCollect = hasPermission('devices.snmp_collect')
+    if (!canRefresh && !canCollect) return undefined
+    let cancelled = false
+
+    const runStatus = async () => {
+      if (!canRefresh || cancelled || document.visibilityState === 'hidden') return
+      try {
+        await snmpApi.statusRefresh(device.id)
+        if (cancelled) return
+        await load({ quiet: true, merge: true })
+      } catch {
+        /* silencioso */
+      }
+    }
+
+    const runFull = async () => {
+      if (!canCollect || cancelled || document.visibilityState === 'hidden') return
+      try {
+        const res = await snmpApi.collect(device.id)
+        if (cancelled) return
+        reportBackendLog(addLog, 'SNMP', 'Coleta SNMP (fundo) — BGP', res.log)
+        await load({ quiet: true, merge: false })
+      } catch {
+        /* silencioso */
+      }
+    }
+
+    const tStatus = canRefresh
+      ? window.setTimeout(() => {
+          void runStatus()
+        }, FIRST_STATUS_DELAY_MS)
+      : null
+    const iStatus = canRefresh
+      ? window.setInterval(() => {
+          void runStatus()
+        }, STATUS_REFRESH_MS)
+      : null
+    const tFull = canCollect
+      ? window.setTimeout(() => {
+          void runFull()
+        }, FIRST_FULL_COLLECT_DELAY_MS)
+      : null
+    const iFull = canCollect
+      ? window.setInterval(() => {
+          void runFull()
+        }, FULL_COLLECT_BG_MS)
+      : null
+
+    return () => {
+      cancelled = true
+      if (tStatus != null) window.clearTimeout(tStatus)
+      if (iStatus != null) window.clearInterval(iStatus)
+      if (tFull != null) window.clearTimeout(tFull)
+      if (iFull != null) window.clearInterval(iFull)
+    }
+  }, [device.id, device.snmp_community, load, addLog, hasPermission])
 
   useLayoutEffect(() => {
     const s = bgpPanelFilterByDeviceId.get(device.id)
     setSearch(s?.search ?? '')
-    setFilterState(s?.filterState ?? 'all')
-    setFilterRole(s?.filterRole ?? 'all')
+    let nextStates = []
+    if (Array.isArray(s?.filterStates)) {
+      nextStates = s.filterStates
+    } else if (s?.filterState && s.filterState !== 'all') {
+      nextStates = [s.filterState]
+    }
+    setFilterStates(nextStates)
+    let nextRoles = []
+    if (Array.isArray(s?.filterRoles)) {
+      nextRoles = s.filterRoles
+    } else if (s?.filterRole && s.filterRole !== 'all') {
+      nextRoles = [s.filterRole]
+    }
+    setFilterRoles(nextRoles)
     setIncludeIbgp(s?.includeIbgp ?? false)
     setRoleDraftByPeerId({})
   }, [device.id])
 
   useEffect(() => {
-    bgpPanelFilterByDeviceId.set(device.id, { search, filterState, filterRole, includeIbgp })
-  }, [device.id, search, filterState, filterRole, includeIbgp])
+    bgpPanelFilterByDeviceId.set(device.id, {
+      search,
+      filterStates,
+      filterRoles,
+      includeIbgp,
+    })
+  }, [device.id, search, filterStates, filterRoles, includeIbgp])
 
   async function handleCollect() {
     if (!device.snmp_community) {
@@ -136,7 +235,7 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
         'SNMP',
         `Coleta OK: ${res.interface_count} interfaces, ${res.bgp_peer_count} peers BGP, AS local ${res.local_as ?? '—'}`,
       )
-      await load()
+      await load({ merge: false })
     } catch (e) {
       const msg = e?.response?.data?.detail || 'Erro na coleta SNMP'
       setError(msg)
@@ -157,11 +256,11 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
     const matchSearch = p.peer_ip.includes(q) ||
       String(p.remote_asn || '').includes(q) ||
       vrfq.includes(q)
-    const matchState = filterState === 'all' || p.status === filterState
+    const statusNorm = String(p.status || '').toLowerCase()
+    const matchState =
+      filterStates.length === 0 || filterStates.includes(statusNorm)
     const role = peerRoleKey(p)
-    const matchRole =
-      filterRole === 'all'
-      || filterRole === role
+    const matchRole = filterRoles.length === 0 || filterRoles.includes(role)
     return matchSearch && matchState && matchRole
   })
 
@@ -209,7 +308,12 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
     setRoleSavingId(peer.id)
     setError(null)
     try {
-      await snmpApi.updatePeerRole(device.id, peer.id, { is_customer, is_provider, is_ix, is_cdn })
+      const updated = await snmpApi.updatePeerRole(device.id, peer.id, {
+        is_customer,
+        is_provider,
+        is_ix,
+        is_cdn,
+      })
       addLog(
         'success',
         'BGP',
@@ -217,7 +321,20 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
       )
       setPeers(prev =>
         prev.map(x =>
-          x.id === peer.id ? { ...x, is_customer, is_provider, is_ix, is_cdn } : x
+          x.id === peer.id
+            ? {
+                ...x,
+                is_customer: updated.is_customer,
+                is_provider: updated.is_provider,
+                is_ix: updated.is_ix,
+                is_cdn: updated.is_cdn,
+                local_addr: updated.local_addr ?? x.local_addr,
+                peer_name: updated.peer_name ?? x.peer_name,
+                peer_display_name: updated.peer_display_name ?? x.peer_display_name,
+                route_policy_import: updated.route_policy_import ?? x.route_policy_import,
+                route_policy_export: updated.route_policy_export ?? x.route_policy_export,
+              }
+            : x
         )
       )
       setRoleDraftByPeerId(prev => {
@@ -404,56 +521,96 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[#4a5568] w-full sm:w-auto sm:mr-1">
             Estado
           </span>
-          {['all', 'established', 'active', 'idle'].map(s => (
-            <button key={s}
-              type="button"
-              onClick={() => setFilterState(s)}
-              className={[
-                'px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all',
-                filterState === s
-                  ? 'bg-[#1e2a45] border-brand-blue/40 text-white'
-                  : 'border-[#252840] text-ink-muted hover:text-ink-secondary hover:bg-[#1e2235]',
-              ].join(' ')}
-            >
-              {s === 'all' ? 'Todos' : s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
-          ))}
+          <button
+            type="button"
+            title="Mostrar todos os estados"
+            onClick={() => setFilterStates([])}
+            className={[
+              'px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all',
+              filterStates.length === 0
+                ? 'bg-[#1e2a45] border-brand-blue/40 text-white'
+                : 'border-[#252840] text-ink-muted hover:text-ink-secondary hover:bg-[#1e2235]',
+            ].join(' ')}
+          >
+            Todos
+          </button>
+          {['established', 'active', 'idle'].map(s => {
+            const on = filterStates.includes(s)
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() =>
+                  setFilterStates(prev =>
+                    prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s],
+                  )
+                }
+                className={[
+                  'px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all',
+                  on
+                    ? 'bg-[#1e2a45] border-brand-blue/40 text-white'
+                    : 'border-[#252840] text-ink-muted hover:text-ink-secondary hover:bg-[#1e2235]',
+                ].join(' ')}
+              >
+                {s.charAt(0).toUpperCase() + s.slice(1)}
+              </button>
+            )
+          })}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[#4a5568] w-full sm:w-auto sm:mr-1">
             Papel
           </span>
+          <button
+            type="button"
+            title="Mostrar todos os papéis"
+            onClick={() => setFilterRoles([])}
+            className={[
+              'px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all inline-flex items-center gap-1.5',
+              filterRoles.length === 0
+                ? 'bg-[#1e2a45] border-brand-blue/40 text-white'
+                : 'border-[#252840] text-ink-muted hover:text-ink-secondary hover:bg-[#1e2235]',
+            ].join(' ')}
+          >
+            Todos
+          </button>
           {[
-            { key: 'all', label: 'Todos' },
             { key: 'customer', label: 'Clientes', count: rolePoolCounts.customer },
             { key: 'provider', label: 'Operadoras', count: rolePoolCounts.provider },
             { key: 'ix', label: 'IX', count: rolePoolCounts.ix },
             { key: 'cdn', label: 'CDN', count: rolePoolCounts.cdn },
-          ].map(({ key, label, count }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setFilterRole(key)}
-              className={[
-                'px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all inline-flex items-center gap-1.5',
-                filterRole === key
-                  ? 'bg-[#1e2a45] border-brand-blue/40 text-white'
-                  : 'border-[#252840] text-ink-muted hover:text-ink-secondary hover:bg-[#1e2235]',
-              ].join(' ')}
-            >
-              {label}
-              {key !== 'all' && count != null && (
-                <span
-                  className={[
-                    'px-1.5 py-px rounded text-[10px] font-semibold',
-                    filterRole === key ? 'bg-brand-blue text-white' : 'bg-[#252840] text-ink-muted',
-                  ].join(' ')}
-                >
-                  {count}
-                </span>
-              )}
-            </button>
-          ))}
+          ].map(({ key, label, count }) => {
+            const on = filterRoles.includes(key)
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() =>
+                  setFilterRoles(prev =>
+                    prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key],
+                  )
+                }
+                className={[
+                  'px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all inline-flex items-center gap-1.5',
+                  on
+                    ? 'bg-[#1e2a45] border-brand-blue/40 text-white'
+                    : 'border-[#252840] text-ink-muted hover:text-ink-secondary hover:bg-[#1e2235]',
+                ].join(' ')}
+              >
+                {label}
+                {count != null && (
+                  <span
+                    className={[
+                      'px-1.5 py-px rounded text-[10px] font-semibold',
+                      on ? 'bg-brand-blue text-white' : 'bg-[#252840] text-ink-muted',
+                    ].join(' ')}
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -537,7 +694,7 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
                     </td>
                     <td className="px-4 py-2.5">
                       <span className="text-[11.5px] text-ink-secondary truncate block max-w-[260px]">
-                        {peer.peer_name || '—'}
+                        {peerTableDisplayName(peer)}
                       </span>
                     </td>
                     <td className="px-4 py-2.5">
@@ -755,7 +912,7 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
           <div className="w-full max-w-xl bg-[#11141f] border border-[#2b3046] rounded-xl shadow-xl">
             <div className="px-4 py-3 border-b border-[#1e2235] flex items-center justify-between">
               <h3 className="text-[14px] font-bold text-ink-primary">
-                {`AS${peerInfoPeer.remote_asn ?? '—'}-${peerInfoPeer.peer_name || peerInfoPeer.peer_ip}`}
+                {peerInfoModalTitle(peerInfoPeer)}
               </h3>
               <button
                 type="button"
@@ -778,6 +935,27 @@ export default function BGPPanel({ device, snmpPollTick = 0 }) {
                 <p className="text-[10px] uppercase tracking-wider text-[#4a5568]">Received-routes</p>
                 <p className="font-mono text-[12px] text-purple-400 mt-1">{peerInfoPeer.in_updates ?? '—'}</p>
               </div>
+              <div className="bg-[#161922] border border-[#252840] rounded-lg px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-[#4a5568]">Route-policy (import)</p>
+                <p className="font-mono text-[11px] text-ink-secondary mt-1 break-all">
+                  {peerInfoPeer.route_policy_import || '—'}
+                </p>
+              </div>
+              <div className="bg-[#161922] border border-[#252840] rounded-lg px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-[#4a5568]">Route-policy (export)</p>
+                <p className="font-mono text-[11px] text-ink-secondary mt-1 break-all">
+                  {peerInfoPeer.route_policy_export || '—'}
+                </p>
+              </div>
+              <p className="text-[10px] text-ink-muted leading-relaxed">
+                Os nomes de route-policy não costumam existir nos OIDs BGP-4-MIB usados no inventário SNMP;
+                aqui são persistidos quando a coleta Huawei consegue SSH e o comando{' '}
+                <span className="font-mono text-ink-secondary">display bgp … peer verbose</span>.
+                Guardar <span className="font-mono">display current-configuration</span> em ficheiro para
+                analisar offline reduz chamadas ao equipamento, mas o texto fica desactualizado face ao
+                running-config e o parse é mais frágil — só compensa se houver muitas consultas repetidas
+                ao mesmo snapshot.
+              </p>
             </div>
           </div>
         </div>

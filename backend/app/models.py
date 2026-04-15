@@ -114,6 +114,10 @@ class Configuration(Base):
     config_text: Mapped[str] = mapped_column(Text, nullable=False)
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Origem da sessão SSH (ex.: ssh_bgp_verbose); dedupe por ``content_sha256``.
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="ssh")
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     device: Mapped["Device"] = relationship(back_populates="configurations")
 
@@ -195,6 +199,9 @@ class BGPPeer(Base):
     inventory_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     last_updated: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Preenchidos na coleta quando o SSH `display bgp … peer verbose` está disponível (não vêm do SNMP).
+    route_policy_import: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    route_policy_export: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     device: Mapped["Device"] = relationship(back_populates="bgp_peers")
 

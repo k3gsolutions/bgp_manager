@@ -14,6 +14,7 @@ from ..crypto import decrypt
 from ..models import Device
 from ..snmp_collector import async_collect_all
 from ..huawei_cli.parsers_bgp import parse_bgp_peers_verbose
+from .config_snapshot import persist_running_config_snapshot, running_config_fetch_needed
 from .inventory_persist import _bgp_peer_row_key, is_ibgp_session, persist_inventory_payload
 
 __all__ = ["is_ibgp_session", "persist_snmp_inventory"]
@@ -45,9 +46,14 @@ def _parse_ipv6_tokens(text: str) -> list[str]:
     return dedup
 
 
-def _collect_huawei_ipv6_map_sync(device: Device) -> dict[str, list[str]]:
+def _collect_huawei_ipv6_map_sync(
+    device: Device,
+    fetch_running_config: bool,
+) -> tuple[dict[str, list[str]], str | None]:
     """
-    Fallback leve: coleta IPv6 por SSH quando SNMP não retorna endereços IPv6.
+    Fallback leve: IPv6 por SSH quando SNMP não retorna endereços IPv6.
+    Só executa ``display current-configuration`` quando ``fetch_running_config`` é True
+    (janela horária desde o último snapshot — ver ``running_config_fetch_needed``).
     """
     from netmiko import ConnectHandler
 
@@ -62,8 +68,12 @@ def _collect_huawei_ipv6_map_sync(device: Device) -> dict[str, list[str]]:
         auth_timeout=45,
         fast_cli=False,
     )
+    snap: str | None = None
+    out = ""
     try:
-        out = conn.send_command("display ipv6 interface brief", read_timeout=120)
+        if fetch_running_config:
+            snap = (conn.send_command("display current-configuration", read_timeout=600) or "").strip() or None
+        out = conn.send_command("display ipv6 interface brief", read_timeout=120) or ""
     finally:
         try:
             conn.disconnect()
@@ -90,10 +100,16 @@ def _collect_huawei_ipv6_map_sync(device: Device) -> dict[str, list[str]]:
             for ip6 in ips:
                 if ip6 not in cur:
                     cur.append(ip6)
-    return by_iface
+    return by_iface, snap
 
 
-async def _enrich_ipv6_via_huawei_ssh_if_needed(device: Device, data: dict, log: list[str]) -> str:
+async def _enrich_ipv6_via_huawei_ssh_if_needed(
+    device: Device,
+    data: dict,
+    log: list[str],
+    db: AsyncSession,
+    device_id: int,
+) -> str:
     interfaces = data.get("interfaces") or []
     if not interfaces:
         return "none"
@@ -111,11 +127,30 @@ async def _enrich_ipv6_via_huawei_ssh_if_needed(device: Device, data: dict, log:
         return "none"
 
     emit(log, "IPv6 via SNMP: nenhum endereço retornado; tentando fallback SSH Huawei...")
+    fetch_cfg = await running_config_fetch_needed(db, device_id)
+    if not fetch_cfg:
+        emit(
+            log,
+            "Running-config: último snapshot dentro da janela horária — "
+            "omitindo ``display current-configuration`` na sessão IPv6 SSH.",
+        )
     try:
-        ipv6_map = await asyncio.to_thread(_collect_huawei_ipv6_map_sync, device)
+        ipv6_map, running_cfg = await asyncio.to_thread(
+            _collect_huawei_ipv6_map_sync,
+            device,
+            fetch_cfg,
+        )
     except Exception as e:
         emit(log, f"Fallback SSH de IPv6 falhou: {e!s}")
         return "none"
+
+    if running_cfg:
+        try:
+            await persist_running_config_snapshot(
+                db, device_id, device, log, running_cfg, source="ssh_ipv6_fallback"
+            )
+        except Exception as e:
+            emit(log, f"Snapshot running-config (IPv6 SSH) não gravado: {e!s}")
 
     if not ipv6_map:
         emit(log, "Fallback SSH de IPv6 executado, mas sem endereços IPv6 retornados.")
@@ -140,8 +175,14 @@ async def _enrich_ipv6_via_huawei_ssh_if_needed(device: Device, data: dict, log:
     return "ssh_fallback" if total_after > 0 else "none"
 
 
-def _collect_huawei_bgp_verbose_peers_sync(device: Device) -> list[dict]:
-    """Coleta peers BGP (IPv4/IPv6) via SSH verbose para enriquecer contadores de rotas."""
+def _collect_huawei_bgp_verbose_peers_sync(
+    device: Device,
+    fetch_running_config: bool,
+) -> tuple[list[dict], str | None]:
+    """
+    Peers BGP (IPv4/IPv6) via SSH verbose.
+    ``display current-configuration`` só quando ``fetch_running_config`` (janela horária).
+    """
     from netmiko import ConnectHandler
 
     password = decrypt(device.password_encrypted)
@@ -155,9 +196,14 @@ def _collect_huawei_bgp_verbose_peers_sync(device: Device) -> list[dict]:
         auth_timeout=45,
         fast_cli=False,
     )
+    snap: str | None = None
+    out_v4 = ""
+    out_v6 = ""
     try:
-        out_v4 = conn.send_command("display bgp peer verbose", read_timeout=180)
-        out_v6 = conn.send_command("display bgp ipv6 peer verbose", read_timeout=180)
+        if fetch_running_config:
+            snap = (conn.send_command("display current-configuration", read_timeout=600) or "").strip() or None
+        out_v4 = conn.send_command("display bgp peer verbose", read_timeout=180) or ""
+        out_v6 = conn.send_command("display bgp ipv6 peer verbose", read_timeout=180) or ""
     finally:
         try:
             conn.disconnect()
@@ -170,6 +216,8 @@ def _collect_huawei_bgp_verbose_peers_sync(device: Device) -> list[dict]:
         pip = p.get("peer_ip")
         if not pip:
             continue
+        rpi = (p.get("route_policy_import") or "").strip()[:512] or None
+        rpe = (p.get("route_policy_export") or "").strip()[:512] or None
         peers.append(
             {
                 "peer_ip": pip,
@@ -181,12 +229,20 @@ def _collect_huawei_bgp_verbose_peers_sync(device: Device) -> list[dict]:
                 "in_updates": p.get("received_total_routes"),
                 "out_updates": p.get("advertised_total_routes"),
                 "uptime_secs": None,
+                "route_policy_import": rpi,
+                "route_policy_export": rpe,
             }
         )
-    return peers
+    return peers, snap
 
 
-async def _enrich_bgp_via_huawei_ssh_if_needed(device: Device, data: dict, log: list[str]) -> str:
+async def _enrich_bgp_via_huawei_ssh_if_needed(
+    device: Device,
+    data: dict,
+    log: list[str],
+    db: AsyncSession,
+    device_id: int,
+) -> str:
     bgp = data.get("bgp") or {}
     peers = bgp.get("peers") or []
     snmp_ipv6_count = sum(1 for p in peers if ":" in str(p.get("peer_ip", "")))
@@ -206,11 +262,30 @@ async def _enrich_bgp_via_huawei_ssh_if_needed(device: Device, data: dict, log: 
         emit(log, "Peers BGP: enriquecendo contadores de rotas via SSH verbose...")
     else:
         emit(log, "Peers BGP IPv6: SNMP sem IPv6, tentando fallback SSH Huawei...")
+    fetch_cfg = await running_config_fetch_needed(db, device_id)
+    if not fetch_cfg:
+        emit(
+            log,
+            "Running-config: último snapshot dentro da janela horária — "
+            "omitindo ``display current-configuration`` na sessão BGP verbose SSH.",
+        )
     try:
-        ssh_peers = await asyncio.to_thread(_collect_huawei_bgp_verbose_peers_sync, device)
+        ssh_peers, running_cfg = await asyncio.to_thread(
+            _collect_huawei_bgp_verbose_peers_sync,
+            device,
+            fetch_cfg,
+        )
     except Exception as e:
         emit(log, f"Enriquecimento SSH de peers BGP falhou: {e!s}")
         return "none"
+
+    if running_cfg:
+        try:
+            await persist_running_config_snapshot(
+                db, device_id, device, log, running_cfg, source="ssh_bgp_verbose"
+            )
+        except Exception as e:
+            emit(log, f"Snapshot running-config (BGP SSH) não gravado: {e!s}")
 
     if not ssh_peers:
         emit(log, "Enriquecimento SSH de peers BGP executado, mas sem dados retornados.")
@@ -234,6 +309,10 @@ async def _enrich_bgp_via_huawei_ssh_if_needed(device: Device, data: dict, log: 
                 p["in_updates"] = ssh_peer.get("in_updates")
             if ssh_peer.get("out_updates") is not None:
                 p["out_updates"] = ssh_peer.get("out_updates")
+            if ssh_peer.get("route_policy_import"):
+                p["route_policy_import"] = ssh_peer.get("route_policy_import")
+            if ssh_peer.get("route_policy_export"):
+                p["route_policy_export"] = ssh_peer.get("route_policy_export")
             if p.get("state") in (None, "", "unknown") and ssh_peer.get("state"):
                 p["state"] = ssh_peer.get("state")
             enriched += 1
@@ -267,8 +346,8 @@ async def persist_snmp_inventory(
         emit(log, "Executando SNMP (sistema, interfaces, BGP4-MIB, VRFs)...")
 
     data = await async_collect_all(device.ip_address, device.snmp_community)
-    ipv6_source = await _enrich_ipv6_via_huawei_ssh_if_needed(device, data, log)
-    bgp_ipv6_source = await _enrich_bgp_via_huawei_ssh_if_needed(device, data, log)
+    ipv6_source = await _enrich_ipv6_via_huawei_ssh_if_needed(device, data, log, db, device_id)
+    bgp_ipv6_source = await _enrich_bgp_via_huawei_ssh_if_needed(device, data, log, db, device_id)
     data["ipv6_source"] = ipv6_source
     data["bgp_ipv6_source"] = bgp_ipv6_source
     return await persist_inventory_payload(

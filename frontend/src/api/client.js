@@ -78,7 +78,13 @@ export function formatAxiosError(err) {
   }
   const direct = (import.meta.env.VITE_API_URL || '').trim()
   if (direct) {
-    return `sem resposta da API em ${apiBaseURL} — confira se o backend está no ar e CORS para ${direct}`
+    return (
+      `sem resposta em ${apiBaseURL} — verifique se o FastAPI está no ar (${direct}). ` +
+      'CORS no backend deve permitir a origem desta página (URL do Vite no navegador), não a URL do API.'
+    )
   }
-  return `sem resposta em ${apiBaseURL} — suba o FastAPI (ex.: uvicorn :8000), abra o app com «npm run dev» (proxy Vite) ou defina VITE_API_URL=http://127.0.0.1:8000 no .env do frontend`
+  return (
+    `sem resposta em ${apiBaseURL} — suba o FastAPI em :8000 e use «npm run dev» (proxy), ` +
+    'ou defina VITE_API_URL=http://127.0.0.1:8000 no .env do frontend (reinicie o Vite).'
+  )
 }
