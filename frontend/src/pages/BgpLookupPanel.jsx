@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import {
-  Search, Loader2, AlertCircle, ChevronDown, ChevronRight,
+  Search, Loader2, AlertCircle, ChevronDown, ChevronRight, Pencil, RefreshCw,
 } from 'lucide-react'
 import { formatAxiosError } from '../api/client.js'
 import { devicesApi } from '../api/devices.js'
 import { reportBackendLog } from '../utils/reportBackendLog.js'
 import { AsPathTokens } from '../components/AsPathTokens.jsx'
 import { useLog } from '../context/LogContext.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,12 +129,39 @@ function formatExportAsName(row, fallbackAsn) {
 
 export default function BgpLookupPanel({ device }) {
   const { addLog } = useLog()
+  const { hasPermission } = useAuth()
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
+  const [opPrefLoading, setOpPrefLoading] = useState(false)
+  const [opPrefError, setOpPrefError] = useState(null)
+  const [opPrefData, setOpPrefData] = useState(null)
+  const [editRow, setEditRow] = useState(null)
+  const [editValue, setEditValue] = useState('')
+  const [confirmStep, setConfirmStep] = useState(false)
+  const [impactAware, setImpactAware] = useState(false)
+  const [applyLoading, setApplyLoading] = useState(false)
+  const [applyError, setApplyError] = useState(null)
   const [exportRoleFilter, setExportRoleFilter] = useState('all')
   const inputRef = useRef(null)
+  const canEditLocalPref = hasPermission('devices.edit')
+
+  async function refreshOperatorLocalPref() {
+    setOpPrefLoading(true)
+    setOpPrefError(null)
+    setOpPrefData(null)
+    try {
+      const data = await devicesApi.bgpOperatorLocalPref(device.id)
+      setOpPrefData(data)
+    } catch (err) {
+      const d = err?.response?.data
+      const msg = formatApiDetail(d?.detail) || formatAxiosError(err) || 'Falha ao carregar LocalPref'
+      setOpPrefError(msg)
+    } finally {
+      setOpPrefLoading(false)
+    }
+  }
 
   // Foca o campo ao montar ou trocar de dispositivo
   useEffect(() => {
@@ -143,6 +171,79 @@ export default function BgpLookupPanel({ device }) {
     setExportRoleFilter('all')
     setTimeout(() => inputRef.current?.focus(), 80)
   }, [device?.id])
+
+  useEffect(() => {
+    let mounted = true
+    async function loadOperatorLocalPref() {
+      try {
+        const data = await devicesApi.bgpOperatorLocalPref(device.id)
+        if (!mounted) return
+        setOpPrefData(data)
+      } catch (err) {
+        if (!mounted) return
+        const d = err?.response?.data
+        const msg = formatApiDetail(d?.detail) || formatAxiosError(err) || 'Falha ao carregar LocalPref'
+        setOpPrefError(msg)
+      } finally {
+        if (mounted) setOpPrefLoading(false)
+      }
+    }
+    if (device?.id) {
+      setOpPrefLoading(true)
+      setOpPrefError(null)
+      setOpPrefData(null)
+      loadOperatorLocalPref()
+    }
+    return () => { mounted = false }
+  }, [device?.id])
+
+  function openLocalPrefEditor(row) {
+    setEditRow(row)
+    setEditValue(String(row?.local_preference ?? ''))
+    setConfirmStep(false)
+    setImpactAware(false)
+    setApplyError(null)
+  }
+
+  function closeLocalPrefEditor() {
+    if (applyLoading) return
+    setEditRow(null)
+    setEditValue('')
+    setConfirmStep(false)
+    setImpactAware(false)
+    setApplyError(null)
+  }
+
+  async function confirmApplyLocalPref() {
+    const next = Number.parseInt(String(editValue || '').trim(), 10)
+    if (!Number.isFinite(next) || next < 0) {
+      setApplyError('Informe um LocalPref válido (>= 0).')
+      return
+    }
+    if (!impactAware) {
+      setApplyError('Marque a ciência de impacto para continuar.')
+      return
+    }
+    setApplyLoading(true)
+    setApplyError(null)
+    try {
+      const applied = await devicesApi.applyBgpOperatorLocalPref(device.id, {
+        peer_id: editRow.peer_id,
+        new_local_preference: next,
+        confirm_impact: true,
+      })
+      await refreshOperatorLocalPref()
+      addLog('success', 'BGP', `LocalPref aplicado em ${editRow.peer_ip}: ${applied?.new_local_preference ?? next}`)
+      closeLocalPrefEditor()
+    } catch (err) {
+      const d = err?.response?.data
+      const msg = formatApiDetail(d?.detail) || formatAxiosError(err) || 'Falha ao aplicar LocalPref'
+      setApplyError(msg)
+      addLog('error', 'BGP', msg)
+    } finally {
+      setApplyLoading(false)
+    }
+  }
 
   if (!device) return null
 
@@ -224,6 +325,180 @@ export default function BgpLookupPanel({ device }) {
           IP, CIDR (ex: 200.1.2.0/24) ou ASN (ex: AS64512) · Huawei VRP via SSH
         </p>
       </div>
+
+      {/* Quadro LocalPref por Operadora */}
+      <div className="mb-4 bg-[#13151f] border border-[#1e2235] rounded-xl p-3">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-[12px] font-semibold text-ink-secondary">
+              Operadoras × Local Preference
+            </h3>
+            <button
+              type="button"
+              onClick={refreshOperatorLocalPref}
+              disabled={opPrefLoading}
+              title="Atualizar LocalPref"
+              aria-label="Atualizar LocalPref"
+              className="p-1 rounded border border-[#2c3250] text-ink-secondary hover:bg-[#1a1d2e] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {opPrefLoading
+                ? <Loader2 size={12} className="animate-spin" />
+                : <RefreshCw size={12} />
+              }
+            </button>
+          </div>
+          {opPrefData?.collected_at && (
+            <span className="text-[10px] text-ink-muted">
+              Última atualização em: {new Date(opPrefData.collected_at).toLocaleString()}
+            </span>
+          )}
+        </div>
+        {opPrefLoading && (
+          <div className="flex items-center gap-2 text-[11px] text-ink-muted py-2">
+            <Loader2 size={12} className="animate-spin" />
+            Carregando LocalPref das Operadoras…
+          </div>
+        )}
+        {!opPrefLoading && opPrefError && (
+          <p className="text-[11px] text-red-300">{opPrefError}</p>
+        )}
+        {!opPrefLoading && !opPrefError && (!opPrefData?.items || opPrefData.items.length === 0) && (
+          <p className="text-[11px] text-ink-muted">Sem Operadoras com dados de LocalPref no backup.</p>
+        )}
+        {!opPrefLoading && !opPrefError && opPrefData?.items?.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-[#252840] text-ink-muted">
+                  <th className="text-left py-1.5 pr-2">Operadora</th>
+                  <th className="text-left py-1.5 pr-2">Peer</th>
+                  <th className="text-left py-1.5 pr-2">VRF</th>
+                  <th className="text-left py-1.5 pr-2">Policy Import</th>
+                  <th className="text-right py-1.5">LocalPref</th>
+                  <th className="text-right py-1.5">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {opPrefData.items.map((row, idx) => (
+                  <tr key={`${row.peer_id}-${idx}`} className="border-b border-[#1e2235] last:border-0">
+                    <td className="py-1.5 pr-2 text-ink-primary">{row.peer_name || '—'}</td>
+                    <td className="py-1.5 pr-2 font-mono text-ink-secondary">{row.peer_ip}</td>
+                    <td className="py-1.5 pr-2 text-ink-muted">{vrfContextLabel(row.vrf_name)}</td>
+                    <td className="py-1.5 pr-2 font-mono text-blue-300">{row.route_policy_import || '—'}</td>
+                    <td className="py-1.5 text-right font-mono text-ink-primary">{row.local_preference ?? '—'}</td>
+                    <td className="py-1.5 text-right">
+                      <button
+                        type="button"
+                        disabled={!canEditLocalPref || !row.route_policy_import}
+                        onClick={() => openLocalPrefEditor(row)}
+                        title="Editar LocalPref"
+                        aria-label="Editar LocalPref"
+                        className="px-2 py-1 rounded border border-[#2c3250] text-ink-secondary hover:bg-[#1a1d2e] disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {editRow && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center px-3">
+          <div className="w-full max-w-lg bg-[#13151f] border border-[#252840] rounded-xl p-4">
+            <h4 className="text-[13px] font-bold text-ink-primary mb-1">
+              Editar Local Preference — {editRow.peer_name || editRow.peer_ip}
+            </h4>
+            <p className="text-[11px] text-ink-muted mb-3">
+              Peer {editRow.peer_ip} · Policy {editRow.route_policy_import} · node 3010
+            </p>
+            <div className="mb-3">
+              <label className="text-[11px] text-ink-muted block mb-1">Novo LocalPref</label>
+              <input
+                type="number"
+                min="0"
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                disabled={applyLoading}
+                className="w-full bg-[#0f111a] border border-[#252840] rounded-lg px-3 py-2 text-[13px] text-ink-primary outline-none focus:border-brand-blue"
+              />
+            </div>
+
+            {!confirmStep && (
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeLocalPrefEditor}
+                  disabled={applyLoading}
+                  className="px-3 py-1.5 rounded border border-[#2c3250] text-[11px] text-ink-secondary"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmStep(true)}
+                  disabled={applyLoading}
+                  className="px-3 py-1.5 rounded bg-brand-blue text-white text-[11px] font-semibold"
+                >
+                  Aplicar
+                </button>
+              </div>
+            )}
+
+            {confirmStep && (
+              <div className="mt-2 border border-amber-500/30 bg-amber-500/10 rounded-lg p-3">
+                <p className="text-[11px] text-amber-200 mb-2">
+                  Confirmação final: esta manobra altera o comportamento de roteamento do dispositivo.
+                </p>
+                <div className="mb-3 bg-[#0f111a] border border-[#252840] rounded p-2">
+                  <p className="text-[10px] text-ink-muted mb-1">Comandos que serão enviados:</p>
+                  <pre className="text-[10px] text-ink-secondary whitespace-pre-wrap">{[
+                    'system-view',
+                    `route-policy ${editRow.route_policy_import} permit node 3010`,
+                    `apply local-preference ${String(editValue || '').trim() || '<novo_valor>'}`,
+                    'quit',
+                    'commit',
+                    'quit',
+                    `display route-policy ${editRow.route_policy_import}`,
+                  ].join('\n')}</pre>
+                </div>
+                <label className="flex items-start gap-2 text-[11px] text-ink-secondary mb-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={impactAware}
+                    onChange={e => setImpactAware(e.target.checked)}
+                    disabled={applyLoading}
+                  />
+                  Estou ciente do impacto operacional desta alteração.
+                </label>
+                {applyError && <p className="text-[11px] text-red-300 mb-2">{applyError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmStep(false)}
+                    disabled={applyLoading}
+                    className="px-3 py-1.5 rounded border border-[#2c3250] text-[11px] text-ink-secondary"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmApplyLocalPref}
+                    disabled={applyLoading || !impactAware}
+                    className="px-3 py-1.5 rounded bg-red-600 text-white text-[11px] font-semibold disabled:opacity-50"
+                  >
+                    {applyLoading ? 'Aplicando...' : 'Confirmar e aplicar'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Barra de busca */}
       <form

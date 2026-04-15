@@ -227,6 +227,42 @@ class BgpExportLookupResponse(BaseModel):
     log: list[str] = Field(default_factory=list)
 
 
+class BgpOperatorLocalPrefItem(BaseModel):
+    peer_id: int
+    peer_ip: str
+    vrf_name: str = ""
+    peer_name: Optional[str] = None
+    route_policy_import: Optional[str] = None
+    local_preference: Optional[int] = None
+
+
+class BgpOperatorLocalPrefResponse(BaseModel):
+    collected_at: Optional[datetime] = None
+    source: str = "backup_config"
+    items: list[BgpOperatorLocalPrefItem] = Field(default_factory=list)
+
+
+class BgpOperatorLocalPrefApplyRequest(BaseModel):
+    peer_id: int = Field(..., ge=1)
+    new_local_preference: int = Field(..., ge=0, le=4294967295)
+    confirm_impact: bool = Field(
+        False,
+        description="Confirma ciência de impacto operacional para aplicar no dispositivo.",
+    )
+
+
+class BgpOperatorLocalPrefApplyResponse(BaseModel):
+    peer_id: int
+    peer_ip: str
+    route_policy_import: str
+    node: int = 3010
+    old_local_preference: Optional[int] = None
+    new_local_preference: int
+    applied: bool = True
+    output: str = ""
+    updated_at: datetime
+
+
 class DeviceConnectTest(BaseModel):
     success: bool
     message: str

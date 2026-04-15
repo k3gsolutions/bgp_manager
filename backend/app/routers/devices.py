@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -13,10 +15,13 @@ from ..audit_log import log_user_consultation
 from ..crypto import decrypt, encrypt
 from ..database import get_db
 from ..deps.auth import CurrentUserCtx, get_device_for_user, require_permission
-from ..models import BGPPeer, Company, Device, Interface, PrefixLookupHistory
+from ..models import BGPPeer, Company, Configuration, Device, Interface, InventoryHistory, PrefixLookupHistory
 from ..schemas import (
     BgpExportLookupRequest,
     BgpExportLookupResponse,
+    BgpOperatorLocalPrefApplyRequest,
+    BgpOperatorLocalPrefApplyResponse,
+    BgpOperatorLocalPrefResponse,
     DeviceBatchImportFailure,
     DeviceBatchImportRequest,
     DeviceBatchImportResponse,
@@ -26,9 +31,11 @@ from ..schemas import (
     DeviceUpdate,
 )
 from ..services.bgp_export_lookup import run_huawei_bgp_export_lookup
-from ..services.bgp_peer_resolve import build_peer_hints_from_db
+from ..services.bgp_peer_resolve import build_peer_hints_from_db, resolve_peer_local_and_name
 from ..services.bgp_peer_maintenance import purge_inactive_bgp_peers
+from ..services.config_snapshot import persist_running_config_snapshot
 from ..services.huawei_ssh_inventory import persist_huawei_cli_inventory
+from ..services.route_policy_local_pref import parse_route_policy_local_preference
 from ..services.snmp_inventory import persist_snmp_inventory
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
@@ -60,6 +67,68 @@ def _safe_json_dumps(obj: object, *, max_len: int = _MAX_LOOKUP_RESULT_JSON) -> 
     return s
 
 
+def _extract_local_pref_for_node(policy_text: str, *, node: int = 3010) -> int | None:
+    """Lê o LocalPref do node alvo no output de `display route-policy`."""
+    current_node: int | None = None
+    rx_node = re.compile(r"^\s*route-policy\s+\S+\s+(?:permit|deny)\s+node\s+(\d+)\b", re.I)
+    rx_apply = re.compile(r"^\s*apply\s+local-preference\s+(\d+)\b", re.I)
+    for raw in (policy_text or "").splitlines():
+        line = raw.strip()
+        m_node = rx_node.match(line)
+        if m_node:
+            try:
+                current_node = int(m_node.group(1))
+            except (TypeError, ValueError):
+                current_node = None
+            continue
+        if current_node != int(node):
+            continue
+        m_apply = rx_apply.match(line)
+        if m_apply:
+            try:
+                return int(m_apply.group(1))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _extract_local_pref_for_policy_node_from_running_cfg(
+    config_text: str,
+    *,
+    policy: str,
+    node: int = 3010,
+) -> int | None:
+    """Extrai LocalPref no node alvo para uma policy no estilo running-config."""
+    target_policy = (policy or "").strip().lower()
+    current_policy: str | None = None
+    current_node: int | None = None
+    rx_policy = re.compile(r"^\s*route-policy\s+(\S+)\s+(?:permit|deny)\s+node\s+(\d+)\b", re.I)
+    rx_apply = re.compile(r"^\s*apply\s+local-preference\s+(\d+)\b", re.I)
+    for raw in (config_text or "").splitlines():
+        line = raw.strip()
+        if line == "#":
+            current_policy = None
+            current_node = None
+            continue
+        m_pol = rx_policy.match(line)
+        if m_pol:
+            current_policy = (m_pol.group(1) or "").strip().lower()
+            try:
+                current_node = int(m_pol.group(2))
+            except (TypeError, ValueError):
+                current_node = None
+            continue
+        if current_policy != target_policy or current_node != int(node):
+            continue
+        m_apply = rx_apply.match(line)
+        if m_apply:
+            try:
+                return int(m_apply.group(1))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 async def _record_prefix_lookup_history(
     db: AsyncSession,
     device_id: int,
@@ -88,6 +157,49 @@ async def _record_prefix_lookup_history(
         result_json=_safe_json_dumps(result, max_len=_MAX_LOOKUP_RESULT_JSON),
     )
     db.add(row)
+    await db.flush()
+
+
+async def _record_local_pref_change_history(
+    db: AsyncSession,
+    *,
+    device_id: int,
+    peer_id: int,
+    peer_ip: str,
+    route_policy_import: str,
+    old_local_preference: int | None,
+    new_local_preference: int,
+    username: str,
+) -> None:
+    ev = InventoryHistory(
+        device_id=device_id,
+        source="manual_local_pref_apply",
+        entity_type="route_policy_local_pref",
+        action="update",
+        entity_key=f"peer:{peer_id}|policy:{route_policy_import}|node:3010",
+        old_json=_safe_json_dumps(
+            {
+                "peer_id": peer_id,
+                "peer_ip": peer_ip,
+                "route_policy_import": route_policy_import,
+                "node": 3010,
+                "local_preference": old_local_preference,
+            },
+            max_len=10_000,
+        ),
+        new_json=_safe_json_dumps(
+            {
+                "peer_id": peer_id,
+                "peer_ip": peer_ip,
+                "route_policy_import": route_policy_import,
+                "node": 3010,
+                "local_preference": new_local_preference,
+                "changed_by": username,
+            },
+            max_len=10_000,
+        ),
+    )
+    db.add(ev)
     await db.flush()
 
 
@@ -488,6 +600,249 @@ async def ssh_bgp_export_lookup(
     except Exception as hist_e:
         emit(log, f"prefix_lookup_history: não gravado (consulta segue): {hist_e!s}")
     return BgpExportLookupResponse(**body)
+
+
+@router.get("/{device_id}/bgp/operator-local-pref", response_model=BgpOperatorLocalPrefResponse)
+async def bgp_operator_local_pref(
+    device_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUserCtx = require_permission("bgp.view"),
+):
+    """
+    Relação de Operadoras (peers classificados como provider) e LocalPref
+    derivado da route-policy de import no último backup de configuração.
+    """
+    await _get_or_404(device_id, db, user)
+    cfg_res = await db.execute(
+        select(Configuration)
+        .where(Configuration.device_id == device_id)
+        .order_by(Configuration.collected_at.desc())
+        .limit(1)
+    )
+    cfg = cfg_res.scalar_one_or_none()
+    policy_lp: dict[str, int] = parse_route_policy_local_preference(cfg.config_text) if cfg else {}
+
+    iface_res = await db.execute(
+        select(Interface).where(Interface.device_id == device_id, Interface.is_active.is_(True))
+    )
+    interfaces = list(iface_res.scalars().all())
+    peer_res = await db.execute(
+        select(BGPPeer)
+        .where(
+            BGPPeer.device_id == device_id,
+            BGPPeer.is_active.is_(True),
+            BGPPeer.is_provider.is_(True),
+        )
+        .order_by(BGPPeer.peer_ip)
+    )
+    peers = list(peer_res.scalars().all())
+
+    items: list[dict] = []
+    for p in peers:
+        local_addr, peer_name = resolve_peer_local_and_name(p.peer_ip, p.local_addr, interfaces)
+        _ = local_addr  # sem uso no payload; mantido para consistência de resolução.
+        pol = (getattr(p, "route_policy_import", None) or "").strip() or None
+        lp = policy_lp.get(pol) if pol else None
+        items.append(
+            {
+                "peer_id": p.id,
+                "peer_ip": p.peer_ip,
+                "vrf_name": (getattr(p, "vrf_name", None) or "").strip(),
+                "peer_name": peer_name,
+                "route_policy_import": pol,
+                "local_preference": lp,
+            }
+        )
+
+    # Ordem de preferência: maior LocalPref primeiro; sem valor ficam no fim.
+    items.sort(key=lambda x: (x["local_preference"] is None, -(x["local_preference"] or -1), x["peer_ip"]))
+    return {
+        "collected_at": cfg.collected_at if cfg else None,
+        "source": "backup_config",
+        "items": items,
+    }
+
+
+@router.post(
+    "/{device_id}/bgp/operator-local-pref/apply",
+    response_model=BgpOperatorLocalPrefApplyResponse,
+)
+async def bgp_operator_local_pref_apply(
+    device_id: int,
+    payload: BgpOperatorLocalPrefApplyRequest,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUserCtx = require_permission("devices.edit"),
+):
+    if not payload.confirm_impact:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmação obrigatória: marque ciência de impacto para aplicar.",
+        )
+    device = await _get_or_404(device_id, db, user)
+    peer_res = await db.execute(
+        select(BGPPeer).where(
+            BGPPeer.id == payload.peer_id,
+            BGPPeer.device_id == device_id,
+            BGPPeer.is_active.is_(True),
+            BGPPeer.is_provider.is_(True),
+        )
+    )
+    peer = peer_res.scalar_one_or_none()
+    if peer is None:
+        raise HTTPException(status_code=404, detail="Peering de Operadora não encontrado")
+    policy = (getattr(peer, "route_policy_import", None) or "").strip()
+    if not policy:
+        raise HTTPException(status_code=400, detail="Peer sem route-policy de import para editar")
+
+    cfg_res = await db.execute(
+        select(Configuration)
+        .where(Configuration.device_id == device_id)
+        .order_by(Configuration.collected_at.desc())
+        .limit(1)
+    )
+    cfg = cfg_res.scalar_one_or_none()
+    old_local_preference = None
+    if cfg and cfg.config_text:
+        old_local_preference = parse_route_policy_local_preference(cfg.config_text).get(policy)
+
+    import asyncio
+    from netmiko import ConnectHandler
+
+    password = decrypt(device.password_encrypted)
+    device_params = {
+        "device_type": _vendor_to_netmiko(device.vendor),
+        "host": device.ip_address,
+        "port": device.ssh_port,
+        "username": device.username,
+        "password": password,
+        "timeout": 60,
+        "auth_timeout": 30,
+        "fast_cli": False,
+    }
+
+    def _run_apply() -> dict:
+        conn = None
+        try:
+            conn = ConnectHandler(**device_params)
+            chunks: list[str] = []
+            # Huawei VRP: alteração em configuração requer commit explícito.
+            chunks.append(
+                conn.send_command_timing("system-view", strip_prompt=False, strip_command=False)
+            )
+            chunks.append(
+                conn.send_command_timing(
+                    f"route-policy {policy} permit node 3010",
+                    strip_prompt=False,
+                    strip_command=False,
+                )
+            )
+            chunks.append(
+                conn.send_command_timing(
+                    f"apply local-preference {payload.new_local_preference}",
+                    strip_prompt=False,
+                    strip_command=False,
+                )
+            )
+            chunks.append(conn.send_command_timing("quit", strip_prompt=False, strip_command=False))
+            chunks.append(conn.send_command_timing("commit", read_timeout=90, strip_prompt=False, strip_command=False))
+            chunks.append(conn.send_command_timing("quit", strip_prompt=False, strip_command=False))
+
+            verify_text = conn.send_command_timing(
+                f"display route-policy {policy}",
+                read_timeout=90,
+                strip_prompt=False,
+                strip_command=False,
+            )
+            chunks.append("\n--- verify display route-policy ---\n")
+            chunks.append(verify_text or "")
+            applied_value = _extract_local_pref_for_node(verify_text, node=3010)
+            if applied_value is None:
+                verify_cfg = conn.send_command_timing(
+                    f"display current-configuration | begin route-policy {policy}",
+                    read_timeout=90,
+                    strip_prompt=False,
+                    strip_command=False,
+                )
+                chunks.append("\n--- verify running-config begin route-policy ---\n")
+                chunks.append(verify_cfg or "")
+                applied_value = _extract_local_pref_for_policy_node_from_running_cfg(
+                    verify_cfg,
+                    policy=policy,
+                    node=3010,
+                )
+            if applied_value != payload.new_local_preference:
+                raise RuntimeError(
+                    "Verificação pós-commit divergente no node 3010 "
+                    f"(esperado={payload.new_local_preference}, lido={applied_value})"
+                )
+            post_cfg = conn.send_command_timing(
+                "display current-configuration",
+                read_timeout=120,
+                strip_prompt=False,
+                strip_command=False,
+            )
+            chunks.append("\n--- post-apply running-config snapshot ---\n")
+            chunks.append(post_cfg or "")
+            return {
+                "output": "".join(chunks),
+                "applied_value": applied_value,
+                "running_config": post_cfg or "",
+            }
+        finally:
+            if conn:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+
+    try:
+        loop = asyncio.get_running_loop()
+        run_data = await loop.run_in_executor(None, _run_apply)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Falha ao aplicar no dispositivo: {e!s}") from e
+
+    apply_log: list[str] = []
+    running_cfg = (run_data.get("running_config") or "").strip()
+    if running_cfg:
+        await persist_running_config_snapshot(
+            db,
+            device_id=device_id,
+            device=device,
+            log=apply_log,
+            config_text=running_cfg,
+            source="ssh_local_pref_apply",
+        )
+    confirmed_local_pref = parse_route_policy_local_preference(running_cfg).get(policy) if running_cfg else None
+    if confirmed_local_pref is None:
+        confirmed_local_pref = run_data.get("applied_value")
+    if confirmed_local_pref is None:
+        raise HTTPException(
+            status_code=502,
+            detail="Alteração aplicada, mas sem confirmação final no snapshot pós-apply.",
+        )
+
+    await _record_local_pref_change_history(
+        db,
+        device_id=device_id,
+        peer_id=peer.id,
+        peer_ip=peer.peer_ip,
+        route_policy_import=policy,
+        old_local_preference=old_local_preference,
+        new_local_preference=int(confirmed_local_pref),
+        username=user.username,
+    )
+    await db.commit()
+    return {
+        "peer_id": peer.id,
+        "peer_ip": peer.peer_ip,
+        "route_policy_import": policy,
+        "node": 3010,
+        "old_local_preference": old_local_preference,
+        "new_local_preference": int(confirmed_local_pref),
+        "applied": True,
+        "output": ((run_data.get("output") or "") + "\n" + "\n".join(apply_log))[:8000],
+        "updated_at": datetime.now(timezone.utc),
+    }
 
 
 @router.post("/{device_id}/test-connection", response_model=DeviceConnectTest)

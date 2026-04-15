@@ -19,6 +19,15 @@ Formato sugerido:
 - ``VITE_API_URL`` com sufixo ``/api`` é normalizado para não gerar ``…/api/api``.
 - Mensagem «sem resposta» com API absoluta inclui o ``Origin`` actual da página e lembra ``CORS_EXTRA_ORIGINS`` em produção ou proxy sem ``VITE_API_URL``.
 
+### BGP Prefix Investigation
+- Novo quadro **Operadoras × Local Preference** na tela de investigação: lista peers classificados como Operadora, mostra policy de import + LocalPref derivado do último backup (`running-config`) e ordena do maior para o menor.
+- Nova API ``GET /api/devices/{id}/bgp/operator-local-pref``.
+
+### Backend — route-policy / backup
+- Enriquecimento de peers via backup no `adapter`: inclui `route_policy_import/export` no payload de inventário e resolve herança por `peer-group`.
+- Na janela de 1h sem novo dump, a coleta SSH reaproveita o último `running-config` salvo no banco para preencher route-policy estática.
+- Novo parser `parse_route_policy_local_preference()` para extrair `apply local-preference` por route-policy.
+
 ### Ferramentas / qualidade
 - ``npm run check`` / ``scripts/check-local.sh``: compileall, ``check_functionality.py``, ``pytest tests`` no backend, e ``vite build`` do frontend.
 - Seed inicial do superadmin: INSERT SQL passa a preencher ``access_all_companies`` (evita NOT NULL em BD novo).
