@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..activity_log import emit
 from ..models import BGPPeer, Device, Interface, InterfaceMetric
+from .interface_name import canonical_interface_name
 from .inventory_history import (
     build_snmp_collect_history,
     persist_history_rows,
@@ -72,23 +73,47 @@ async def persist_inventory_payload(
     )
     await persist_history_rows(db, hist_rows, log)
 
+    ssh_complement_only = str(source or "").startswith("ssh")
+
     prev_if = await db.execute(select(Interface).where(Interface.device_id == device_id))
     existing_if: dict[str, Interface] = {i.name: i for i in prev_if.scalars().all()}
     seen_if: set[str] = set()
     saved_interfaces: list[tuple[Interface, dict]] = []
 
     for iface in data["interfaces"]:
-        name = iface["name"]
+        name = canonical_interface_name(iface.get("name"))
+        if not name:
+            continue
         seen_if.add(name)
         if name in existing_if:
             db_iface = existing_if[name]
-            db_iface.description = iface.get("alias") or None
-            db_iface.ip_address = iface.get("ip_address")
-            db_iface.netmask = iface.get("netmask")
-            db_iface.ipv6_addresses = ",".join(iface.get("ipv6_addresses") or []) or None
-            db_iface.admin_status = iface.get("admin_status")
-            db_iface.status = iface.get("oper_status", "unknown")
-            db_iface.speed_mbps = iface.get("speed_mbps")
+            if ssh_complement_only:
+                # SNMP é fonte primária: em coleta SSH, apenas preenche lacunas.
+                if not (db_iface.description or "").strip():
+                    db_iface.description = iface.get("alias") or None
+                if not db_iface.ip_address and iface.get("ip_address"):
+                    db_iface.ip_address = iface.get("ip_address")
+                if not db_iface.netmask and iface.get("netmask"):
+                    db_iface.netmask = iface.get("netmask")
+                cur_v6 = [x.strip() for x in (db_iface.ipv6_addresses or "").split(",") if x.strip()]
+                new_v6 = [x for x in (iface.get("ipv6_addresses") or []) if str(x).strip()]
+                if new_v6:
+                    merged = list(dict.fromkeys(cur_v6 + new_v6))
+                    db_iface.ipv6_addresses = ",".join(merged) or None
+                if not (db_iface.admin_status or "").strip() and iface.get("admin_status"):
+                    db_iface.admin_status = iface.get("admin_status")
+                if (db_iface.status or "").strip().lower() in ("", "unknown"):
+                    db_iface.status = iface.get("oper_status", "unknown")
+                if db_iface.speed_mbps is None and iface.get("speed_mbps") is not None:
+                    db_iface.speed_mbps = iface.get("speed_mbps")
+            else:
+                db_iface.description = iface.get("alias") or None
+                db_iface.ip_address = iface.get("ip_address")
+                db_iface.netmask = iface.get("netmask")
+                db_iface.ipv6_addresses = ",".join(iface.get("ipv6_addresses") or []) or None
+                db_iface.admin_status = iface.get("admin_status")
+                db_iface.status = iface.get("oper_status", "unknown")
+                db_iface.speed_mbps = iface.get("speed_mbps")
             db_iface.last_updated = _now()
             db_iface.is_active = True
             db_iface.deactivated_at = None
@@ -121,11 +146,13 @@ async def persist_inventory_payload(
             await db.delete(old_iface)
             existing_if.pop(old_name, None)
 
-    # Não remover do banco: apenas marcar como inativo quando sumir da coleta
-    for name, old_iface in existing_if.items():
-        if name not in seen_if and old_iface.is_active:
-            old_iface.is_active = False
-            old_iface.deactivated_at = _now()
+    # Não remover do banco: marca como inativo só em coleta base (SNMP).
+    # Em coleta SSH complementar, ausência não significa remoção real.
+    if not ssh_complement_only:
+        for name, old_iface in existing_if.items():
+            if name not in seen_if and old_iface.is_active:
+                old_iface.is_active = False
+                old_iface.deactivated_at = _now()
 
     await db.flush()
 

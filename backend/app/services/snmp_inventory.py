@@ -14,6 +14,7 @@ from ..crypto import decrypt
 from ..models import Device
 from ..snmp_collector import async_collect_all
 from ..huawei_cli.parsers_bgp import parse_bgp_peers_verbose
+from .interface_name import canonical_interface_name
 from .config_snapshot import persist_running_config_snapshot, running_config_fetch_needed
 from .inventory_persist import _bgp_peer_row_key, is_ibgp_session, persist_inventory_payload
 
@@ -156,10 +157,14 @@ async def _enrich_ipv6_via_huawei_ssh_if_needed(
         emit(log, "Fallback SSH de IPv6 executado, mas sem endereços IPv6 retornados.")
         return "none"
 
-    iface_by_name = {str(i.get("name", "")).strip().lower(): i for i in interfaces}
+    iface_by_name = {
+        canonical_interface_name(i.get("name")).lower(): i
+        for i in interfaces
+        if canonical_interface_name(i.get("name"))
+    }
     applied = 0
     for ifname, addrs in ipv6_map.items():
-        row = iface_by_name.get(ifname.strip().lower())
+        row = iface_by_name.get(canonical_interface_name(ifname).lower())
         if not row:
             continue
         merged = list(dict.fromkeys((row.get("ipv6_addresses") or []) + addrs))

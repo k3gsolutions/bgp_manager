@@ -8,6 +8,7 @@ import ipaddress
 import re
 
 from ..models import Device
+from ..services.interface_name import canonical_interface_name
 from .parsers_bgp import parse_bgp_peers, parse_bgp_peers_verbose
 from .parsers_if import (
     parse_interface_brief,
@@ -145,30 +146,46 @@ def build_inventory_payload_from_cli(
     ipv6_by_iface = parse_ipv6_interface_brief(raw.get("ipv6_interfaces", ""))
     lag_members = parse_lag_members(raw.get("running_config", ""))
 
-    iface_names = {i["name"] for i in ifaces}
+    for i in ifaces:
+        i["name"] = canonical_interface_name(i.get("name"))
+    iface_names = {i["name"] for i in ifaces if i.get("name")}
     for member_name, _parent in lag_members.items():
-        if member_name not in iface_names:
+        member_norm = canonical_interface_name(member_name)
+        if not member_norm:
+            continue
+        if member_norm not in iface_names:
             ifaces.append({
-                "name": member_name,
+                "name": member_norm,
                 "admin_status": "up",
                 "oper_status": "up",
             })
-            iface_names.add(member_name)
+            iface_names.add(member_norm)
 
     ip_by_iface: dict[str, tuple[str | None, str | None]] = {}
     for row in ip_rows:
-        ip_by_iface[row["interface"]] = _split_ip(row["address"])
+        k = canonical_interface_name(row.get("interface"))
+        if k:
+            ip_by_iface[k] = _split_ip(row["address"])
+
+    ipv6_norm: dict[str, list[str]] = {}
+    for ifn, vals in ipv6_by_iface.items():
+        k = canonical_interface_name(ifn)
+        if not k:
+            continue
+        ipv6_norm[k] = vals
 
     snmp_like_ifaces: list[dict] = []
     for iface in ifaces:
-        name = iface["name"]
+        name = canonical_interface_name(iface.get("name"))
+        if not name:
+            continue
         ip_addr, netmask = ip_by_iface.get(name, (None, None))
         snmp_like_ifaces.append({
             "name": name,
             "alias": descriptions.get(name),
             "ip_address": ip_addr,
             "netmask": netmask,
-            "ipv6_addresses": ipv6_by_iface.get(name, []),
+            "ipv6_addresses": ipv6_norm.get(name, []),
             "admin_status": iface.get("admin_status"),
             "oper_status": iface.get("oper_status", "unknown"),
             "speed_mbps": None,

@@ -1,5 +1,7 @@
 import json
 import re
+import socket
+import time
 from datetime import datetime, timezone
 from typing import List
 
@@ -772,14 +774,37 @@ async def bgp_operator_local_pref_apply(
         "username": device.username,
         "password": password,
         "timeout": 60,
+        "conn_timeout": 20,
+        "banner_timeout": 45,
         "auth_timeout": 30,
         "fast_cli": False,
     }
 
     def _run_apply() -> dict:
-        conn = None
+        # Pré-check TCP deixa o erro mais assertivo quando há bloqueio de rede/firewall.
         try:
-            conn = ConnectHandler(**device_params)
+            with socket.create_connection((device.ip_address, int(device.ssh_port)), timeout=5):
+                pass
+        except OSError as tcp_e:
+            raise RuntimeError(
+                f"Pré-check TCP falhou em {device.ip_address}:{device.ssh_port} ({tcp_e!s})"
+            ) from tcp_e
+
+        conn = None
+        last_err: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                conn = ConnectHandler(**device_params)
+                break
+            except Exception as e:
+                last_err = e
+                if attempt >= 3:
+                    raise RuntimeError(
+                        "SSH falhou após 3 tentativas "
+                        f"({device.ip_address}:{device.ssh_port}): {e!s}"
+                    ) from e
+                time.sleep(1.0 * attempt)
+        try:
             chunks: list[str] = []
             # Huawei VRP: alteração em configuração requer commit explícito.
             chunks.append(
