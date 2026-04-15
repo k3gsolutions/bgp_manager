@@ -605,6 +605,7 @@ async def ssh_bgp_export_lookup(
 @router.get("/{device_id}/bgp/operator-local-pref", response_model=BgpOperatorLocalPrefResponse)
 async def bgp_operator_local_pref(
     device_id: int,
+    force_refresh: bool = Query(False, description="Quando true, força coleta SSH de running-config."),
     db: AsyncSession = Depends(get_db),
     user: CurrentUserCtx = require_permission("bgp.view"),
 ):
@@ -612,7 +613,62 @@ async def bgp_operator_local_pref(
     Relação de Operadoras (peers classificados como provider) e LocalPref
     derivado da route-policy de import no último backup de configuração.
     """
-    await _get_or_404(device_id, db, user)
+    device = await _get_or_404(device_id, db, user)
+    source = "backup_config"
+    if force_refresh:
+        import asyncio
+        from netmiko import ConnectHandler
+
+        if (device.vendor or "").strip().lower() != "huawei":
+            raise HTTPException(status_code=400, detail="Atualização forçada suportada apenas para Huawei")
+
+        password = decrypt(device.password_encrypted)
+        device_params = {
+            "device_type": _vendor_to_netmiko(device.vendor),
+            "host": device.ip_address,
+            "port": device.ssh_port,
+            "username": device.username,
+            "password": password,
+            "timeout": 60,
+            "auth_timeout": 30,
+            "fast_cli": False,
+        }
+
+        def _run_fetch_cfg() -> str:
+            conn = None
+            try:
+                conn = ConnectHandler(**device_params)
+                return conn.send_command_timing(
+                    "display current-configuration",
+                    read_timeout=120,
+                    strip_prompt=False,
+                    strip_command=False,
+                )
+            finally:
+                if conn:
+                    try:
+                        conn.disconnect()
+                    except Exception:
+                        pass
+
+        try:
+            loop = asyncio.get_running_loop()
+            fresh_cfg = await loop.run_in_executor(None, _run_fetch_cfg)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Falha na coleta SSH do LocalPref: {e!s}") from e
+
+        refresh_log: list[str] = []
+        await persist_running_config_snapshot(
+            db,
+            device_id=device_id,
+            device=device,
+            log=refresh_log,
+            config_text=fresh_cfg or "",
+            source="ssh_operator_local_pref_refresh",
+        )
+        await db.commit()
+        source = "live_ssh_refresh"
+
     cfg_res = await db.execute(
         select(Configuration)
         .where(Configuration.device_id == device_id)
@@ -658,7 +714,7 @@ async def bgp_operator_local_pref(
     items.sort(key=lambda x: (x["local_preference"] is None, -(x["local_preference"] or -1), x["peer_ip"]))
     return {
         "collected_at": cfg.collected_at if cfg else None,
-        "source": "backup_config",
+        "source": source,
         "items": items,
     }
 

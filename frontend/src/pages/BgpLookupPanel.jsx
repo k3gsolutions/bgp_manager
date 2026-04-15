@@ -147,12 +147,14 @@ export default function BgpLookupPanel({ device }) {
   const inputRef = useRef(null)
   const canEditLocalPref = hasPermission('devices.edit')
 
-  async function refreshOperatorLocalPref() {
+  async function refreshOperatorLocalPref(forceRefresh = false) {
     setOpPrefLoading(true)
     setOpPrefError(null)
-    setOpPrefData(null)
+    if (forceRefresh) {
+      addLog('info', 'BGP', `LocalPref: coleta forçada no dispositivo ${label}...`)
+    }
     try {
-      const data = await devicesApi.bgpOperatorLocalPref(device.id)
+      const data = await devicesApi.bgpOperatorLocalPref(device.id, { forceRefresh })
       setOpPrefData(data)
     } catch (err) {
       const d = err?.response?.data
@@ -335,14 +337,14 @@ export default function BgpLookupPanel({ device }) {
             </h3>
             <button
               type="button"
-              onClick={refreshOperatorLocalPref}
+              onClick={() => refreshOperatorLocalPref(true)}
               disabled={opPrefLoading}
               title="Atualizar LocalPref"
               aria-label="Atualizar LocalPref"
               className="p-1 rounded border border-[#2c3250] text-ink-secondary hover:bg-[#1a1d2e] disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {opPrefLoading
-                ? <Loader2 size={12} className="animate-spin" />
+                ? <RefreshCw size={12} className="animate-spin" />
                 : <RefreshCw size={12} />
               }
             </button>

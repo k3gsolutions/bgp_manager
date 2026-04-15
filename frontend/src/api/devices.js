@@ -23,8 +23,10 @@ export const devicesApi = {
   bgpExportLookup: (id, body) =>
     api.post(`/devices/${id}/ssh/bgp-export-lookup`, body).then(r => r.data),
   /** Operadoras + LocalPref (derivado da route-policy de import no backup). */
-  bgpOperatorLocalPref: (id) =>
-    api.get(`/devices/${id}/bgp/operator-local-pref`).then(r => r.data),
+  bgpOperatorLocalPref: (id, opts) =>
+    api.get(`/devices/${id}/bgp/operator-local-pref`, {
+      params: { force_refresh: Boolean(opts?.forceRefresh) },
+    }).then(r => r.data),
   /** Aplica novo LocalPref no node 3010 da route-policy de import. */
   applyBgpOperatorLocalPref: (id, body) =>
     api.post(`/devices/${id}/bgp/operator-local-pref/apply`, body).then(r => r.data),
