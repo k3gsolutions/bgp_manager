@@ -4,16 +4,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "== [1/3] Python compileall (backend/app) =="
+echo "== [1/5] Python compileall (backend/app) =="
 python -m compileall -q backend/app
 
-echo "== [2/4] Backend — tools/check_functionality.py =="
+echo "== [2/5] Backend — tools/check_functionality.py =="
 python tools/check_functionality.py
 
-echo "== [3/4] Backend — pytest (CORS preflight, etc.) =="
+echo "== [3/5] Backend — pytest (CORS preflight, etc.) =="
 ( cd backend && pytest tests -q )
 
-echo "== [4/4] Frontend — npm run build =="
+echo "== [4/5] BGP Advertised-to — tools/simulate_bgp_advertised_parse.py =="
+python tools/simulate_bgp_advertised_parse.py
+
+echo "== [5/5] Frontend — npm run build =="
 npm run build
 
 echo ""

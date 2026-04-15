@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.services.bgp_export_lookup import _parse_advertised_to_peers, _ssh_text_for_advertised_peers
+from app.services.bgp_export_lookup import (
+    _parse_advertised_to_peers,
+    _ssh_text_for_advertised_peers,
+    advertised_peer_ips_from_huawei_routing_outputs,
+)
 
 
 VISION_SAMPLE = """=== passo1 ===
@@ -97,3 +101,21 @@ def test_parse_these_peers_variant() -> None:
     text = " Advertised to these peers:\n 198.51.100.1\n"
     ips = _parse_advertised_to_peers(text)
     assert ips == ["198.51.100.1"]
+
+
+def test_public_collect_matches_fixture_order() -> None:
+    """Merge coloca basic (passo1) antes do detail — regressão para lista no fim do buffer."""
+    detail = " Advertised to such 2 peers:\nNOT_IP\n"
+    basic = " Advertised to such 2 peers:\n10.0.0.1\n10.0.0.2\n"
+    ips = advertised_peer_ips_from_huawei_routing_outputs(detail, basic)
+    assert ips == ["10.0.0.1", "10.0.0.2"]
+
+
+def test_public_collect_empty() -> None:
+    assert advertised_peer_ips_from_huawei_routing_outputs("", "") == []
+
+
+def test_ssh_merge_basic_then_detail() -> None:
+    merged = _ssh_text_for_advertised_peers("LINE_DETAIL\n", "LINE_BASIC\n")
+    assert merged.split("\n")[0] == "LINE_BASIC"
+    assert merged.split("\n")[1] == "LINE_DETAIL"

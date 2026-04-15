@@ -247,6 +247,14 @@ _ADV_TO_HEADER_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _normalize_huawei_cli_text(s: str) -> str:
+    """Remove BOM e normaliza quebras de linha (SSH / ficheiros Windows)."""
+    if not s:
+        return ""
+    t = str(s).replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
+    return t.lstrip("\ufeff")
+
+
 def _token_might_be_peer_ip(tok: str) -> str | None:
     """Normaliza token (vírgulas, parênteses Huawei) e devolve IP válido ou None."""
     t = (tok or "").strip().rstrip(",").strip()
@@ -274,10 +282,11 @@ def _parse_advertised_to_peers(detail_text: str) -> list[str]:
 
     Não exige linha em branco após a lista. IPv4/IPv6, uma por linha ou na mesma linha após ':'.
     """
+    detail_text = _normalize_huawei_cli_text(detail_text or "")
     if not detail_text:
         return []
     ips: list[str] = []
-    lines = detail_text.replace("\r\n", "\n").split("\n")
+    lines = detail_text.split("\n")
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -309,9 +318,40 @@ def _parse_advertised_to_peers(detail_text: str) -> list[str]:
 
 
 def _ssh_text_for_advertised_peers(detail_out: str, basic_out: str) -> str:
-    """Junta passo2 + passo1: o detail muitas vezes não traz 'Advertised to…' (só o resumo)."""
-    parts = [x for x in (detail_out or "", basic_out or "") if x and x.strip()]
+    """
+    Junta passo1 + passo2 para o parser (routing-table simples PRIMEIRO).
+
+    O ``display … detail`` pode repetir o cabeçalho ``Advertised to…`` sem a lista de IPs;
+    o resumo do ``display bgp routing-table P/L`` é onde a lista aparece com mais fiabilidade.
+    """
+    parts: list[str] = []
+    for x in (basic_out or "", detail_out or ""):
+        xn = _normalize_huawei_cli_text(x).strip()
+        if xn:
+            parts.append(xn)
     return "\n".join(parts) if parts else ""
+
+
+def advertised_peer_ips_from_huawei_routing_outputs(
+    detail_out: str | None,
+    basic_out: str | None,
+) -> list[str]:
+    """
+    Extrai IPs do bloco *Advertised to … peers* a partir das saídas SSH (detail + basic).
+
+    Usado por ``run_huawei_bgp_export_lookup`` e por ``tools/simulate_bgp_advertised_parse.py``.
+    Inclui fallback se o texto concatenado não produzir lista (ex.: só detail truncado).
+    """
+    b = _normalize_huawei_cli_text(basic_out or "")
+    d = _normalize_huawei_cli_text(detail_out or "")
+    merged = _ssh_text_for_advertised_peers(d, b)
+    ips = _parse_advertised_to_peers(merged)
+    if ips:
+        return ips
+    ips = _parse_advertised_to_peers(b)
+    if ips:
+        return ips
+    return _parse_advertised_to_peers(d)
 
 
 def _peer_address_family(peer_ip: str) -> str:
@@ -588,8 +628,8 @@ def _investigate(
             else:
                 from_peer = _step3_peer_verbose(conn, from_peer_ip, log)
 
-        # Passos 5 + 6 — "Advertised to such …" costuma estar só no passo1; o detail pode omitir.
-        advertised_peer_ips = _parse_advertised_to_peers(_ssh_text_for_advertised_peers(detail_out, basic_out))
+        # Passos 5 + 6 — lista "Advertised to …" (passo1 primeiro no merge + fallbacks).
+        advertised_peer_ips = advertised_peer_ips_from_huawei_routing_outputs(detail_out, basic_out)
         ops_by_ip = _operator_peers_by_ip(operator_peers)
         candidate_ips = list(advertised_peer_ips)
         advertised_to: list[dict[str, Any]] = []
