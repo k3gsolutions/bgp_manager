@@ -15,6 +15,20 @@ function downloadJson(filename, payload) {
   URL.revokeObjectURL(url)
 }
 
+/** Aceita envelope da API (`data`) ou só o mapa de tabelas (ex.: JSON editado). */
+function extractBackupTables(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+    return parsed.data
+  }
+  const metaKeys = new Set(['exported_at', 'table_counts', 'imported_at', 'detail', 'message'])
+  const keys = Object.keys(parsed).filter(k => !metaKeys.has(k))
+  if (!keys.length) return null
+  const looksLikeTables = keys.some(k => Array.isArray(parsed[k]))
+  if (!looksLikeTables) return null
+  return Object.fromEntries(keys.map(k => [k, parsed[k]]))
+}
+
 export default function ManagementPage() {
   const [busyExport, setBusyExport] = useState(false)
   const [busyImport, setBusyImport] = useState(false)
@@ -84,7 +98,8 @@ export default function ManagementPage() {
     setErr('')
     setMsg('')
     if (!file) return
-    const text = await file.text()
+    const rawText = await file.text()
+    const text = rawText.replace(/^\uFEFF/, '')
     let parsed
     try {
       parsed = JSON.parse(text)
@@ -92,9 +107,11 @@ export default function ManagementPage() {
       setErr('Arquivo inválido: JSON mal formatado.')
       return
     }
-    const data = parsed?.data
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
-      setErr("Arquivo inválido: campo 'data' não encontrado.")
+    const data = extractBackupTables(parsed)
+    if (!data) {
+      setErr(
+        "Arquivo inválido: esperado o JSON exportado pela aplicação (objeto com 'data') ou um objeto cujas chaves são tabelas (ex.: companies, users, devices…).",
+      )
       return
     }
     if (!window.confirm('Importar backup completo? Os registros atuais serão substituídos.')) return
@@ -146,7 +163,10 @@ export default function ManagementPage() {
           <AlertTriangle size={15} className="mt-0.5 text-amber-300" />
           <p>
             Backup inclui dados sensíveis (utilizadores, hashes e credenciais cifradas de dispositivos).
-            Guarde o arquivo em local seguro e importe apenas em ambiente confiável.
+            Guarde o arquivo em local seguro e importe apenas em ambiente confiável. No servidor de destino, a
+            mesma chave <span className="font-mono text-ink-secondary">FERNET_KEY</span> é necessária para
+            desencriptar senhas SSH já gravadas; caso contrário, redefina as senhas dos equipamentos após
+            importar.
           </p>
         </div>
       </div>
@@ -210,7 +230,8 @@ export default function ManagementPage() {
         <div className="rounded-xl border border-[#1e2235] bg-[#161922] p-4">
           <h2 className="text-[14px] font-semibold text-ink-primary mb-2">Exportar backup</h2>
           <p className="text-[12px] text-ink-muted mb-3">
-            Baixa um JSON com o estado completo do banco para restauração em outro servidor.
+            Baixa um JSON com o estado completo do banco para restauração em outro servidor (apenas
+            superadmin).
           </p>
           <button
             type="button"
@@ -226,7 +247,8 @@ export default function ManagementPage() {
         <div className="rounded-xl border border-[#1e2235] bg-[#161922] p-4">
           <h2 className="text-[14px] font-semibold text-ink-primary mb-2">Importar backup</h2>
           <p className="text-[12px] text-ink-muted mb-3">
-            Restaura um backup completo previamente exportado, substituindo os dados atuais.
+            Restaura um backup completo exportado nesta aplicação (ou só o bloco de tabelas), substituindo os
+            dados atuais. Requer superadmin.
           </p>
           <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#252840] text-ink-secondary text-[12px] hover:bg-[#1e2235] cursor-pointer">
             {busyImport ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}

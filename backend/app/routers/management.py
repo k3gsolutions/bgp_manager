@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, select
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import Base, get_db
@@ -65,12 +65,18 @@ def _coerce_value(v: Any, column) -> Any:
     ctype = column.type
     if isinstance(ctype, DateTime):
         if isinstance(v, datetime):
+            if getattr(ctype, "timezone", False) and v.tzinfo is None:
+                return v.replace(tzinfo=timezone.utc)
             return v
         if isinstance(v, str):
             try:
-                return datetime.fromisoformat(v)
+                s = v.strip().replace("Z", "+00:00")
+                dt = datetime.fromisoformat(s)
             except ValueError:
                 return v
+            if getattr(ctype, "timezone", False) and dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
     if isinstance(ctype, Boolean):
         if isinstance(v, bool):
             return v
@@ -85,6 +91,45 @@ def _coerce_value(v: Any, column) -> Any:
         except (TypeError, ValueError):
             return v
     return v
+
+
+def _safe_pg_identifier(name: str) -> str:
+    if not name or not name.replace("_", "").isalnum():
+        raise HTTPException(status_code=422, detail=f"Identificador de tabela/coluna inválido: {name!r}")
+    return name
+
+
+async def _resync_postgresql_sequences(db: AsyncSession) -> None:
+    """Após importar IDs explícitos, alinha sequências SERIAL/IDENTITY (evita colisão no próximo INSERT)."""
+    bind = db.get_bind()
+    if bind is None or bind.dialect.name != "postgresql":
+        return
+    for table in Base.metadata.sorted_tables:
+        pks = list(table.primary_key.columns)
+        if len(pks) != 1:
+            continue
+        col = pks[0]
+        if not isinstance(col.type, (Integer, BigInteger)):
+            continue
+        tname = _safe_pg_identifier(table.name)
+        cname = _safe_pg_identifier(col.name)
+        reg = f"public.{tname}"
+        seq_row = await db.execute(text("SELECT pg_get_serial_sequence(:reg, :cname)"), {"reg": reg, "cname": cname})
+        seq_name = seq_row.scalar()
+        if not seq_name:
+            continue
+        mx_row = await db.execute(text(f'SELECT MAX("{cname}") AS m FROM "{tname}"'))
+        mx = mx_row.scalar()
+        if mx is None:
+            await db.execute(
+                text("SELECT setval(CAST(:seq AS regclass), 1, false)"),
+                {"seq": seq_name},
+            )
+        else:
+            await db.execute(
+                text("SELECT setval(CAST(:seq AS regclass), CAST(:mx AS bigint), true)"),
+                {"seq": seq_name, "mx": int(mx)},
+            )
 
 
 @router.get("/backup/export", response_model=BackupExportResponse)
@@ -105,7 +150,7 @@ async def export_backup(
         counts[table.name] = len(rows)
 
     return BackupExportResponse(
-        exported_at=datetime.utcnow().isoformat() + "Z",
+        exported_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         table_counts=counts,
         data=out,
     )
@@ -153,11 +198,13 @@ async def import_backup(
                             if col.name in row
                         }
                     )
-                await db.execute(table.insert(), cooked)
+                await db.execute(insert(table), cooked)
             imported_counts[table.name] = len(rows)
 
+    await _resync_postgresql_sequences(db)
+
     return BackupImportResponse(
-        imported_at=datetime.utcnow().isoformat() + "Z",
+        imported_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         table_counts=imported_counts,
     )
 
