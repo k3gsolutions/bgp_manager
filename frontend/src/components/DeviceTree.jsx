@@ -12,21 +12,40 @@ const VIEWS = [
 
 // 'lookup' é a view padrão ao clicar no nome do dispositivo (não aparece como sub-item)
 
-function groupByClient(devices) {
+/** Agrupa por empresa (RBAC): `company_name` da API; fallback ao rótulo `client`; depois `company_id`. */
+function groupLabelForDevice(d) {
+  const companyName = (d.company_name || '').trim()
+  if (companyName) return companyName
+  const client = (d.client || '').trim()
+  if (client) return client
+  if (d.company_id != null && Number.isFinite(Number(d.company_id))) {
+    return `Empresa #${d.company_id}`
+  }
+  return 'Sem empresa'
+}
+
+function groupDevicesForTree(devices) {
   const map = {}
   for (const d of devices) {
-    const key = d.client || 'Sem cliente'
+    const key = groupLabelForDevice(d)
     if (!map[key]) map[key] = []
     map[key].push(d)
   }
-  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+  const entries = Object.entries(map)
+  entries.sort(([a], [b]) => {
+    const aUnassigned = /^sem\b/i.test(a)
+    const bUnassigned = /^sem\b/i.test(b)
+    if (aUnassigned !== bUnassigned) return aUnassigned ? 1 : -1
+    return a.localeCompare(b, 'pt', { sensitivity: 'base' })
+  })
+  return entries
 }
 
 export default function DeviceTree({ devices, selected, onSelect, onNewDevice }) {
   const [expandedClients, setExpandedClients] = useState({})
   const [expandedDevices, setExpandedDevices] = useState({})
 
-  const groups = groupByClient(devices)
+  const groups = groupDevicesForTree(devices)
 
   function toggleClient(client) {
     setExpandedClients(s => ({ ...s, [client]: !s[client] }))
@@ -80,25 +99,25 @@ export default function DeviceTree({ devices, selected, onSelect, onNewDevice })
             </button>
           </div>
         ) : (
-          groups.map(([client, clientDevices]) => (
-            <div key={client}>
-              {/* CLIENT node */}
+          groups.map(([groupKey, groupDevices]) => (
+            <div key={groupKey}>
+              {/* Empresa (RBAC) ou rótulo cliente opcional */}
               <button
-                onClick={() => toggleClient(client)}
+                onClick={() => toggleClient(groupKey)}
                 className="flex items-center gap-1.5 w-full px-3 py-1.5 text-left hover:bg-[#1a1d2e] transition-colors group"
               >
-                {isClientExpanded(client)
+                {isClientExpanded(groupKey)
                   ? <ChevronDown size={11} className="text-ink-muted shrink-0" />
                   : <ChevronRight size={11} className="text-ink-muted shrink-0" />}
                 <span className="text-[11px] font-semibold text-ink-secondary uppercase tracking-wide truncate">
-                  {client}
+                  {groupKey}
                 </span>
                 <span className="ml-auto text-[9px] bg-[#1e2235] text-ink-muted px-1.5 py-0.5 rounded-full shrink-0">
-                  {clientDevices.length}
+                  {groupDevices.length}
                 </span>
               </button>
 
-              {isClientExpanded(client) && clientDevices.map(device => {
+              {isClientExpanded(groupKey) && groupDevices.map(device => {
                 const devExpanded = isDeviceExpanded(device.id)
                 const isActiveDevice = selected?.device?.id === device.id
 
