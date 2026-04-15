@@ -233,19 +233,46 @@ def _route_not_found(out: str) -> bool:
     return any(m in low for m in markers)
 
 
-_ADV_TO_HEADER = re.compile(r"Advertised to such\s+\d+\s+peers\s*:", re.I)
+# VRP varia entre versões (VRP5/8, NE, CX) na frase exacta antes da lista de IPs.
+# Ordem: padrões mais específicos antes dos genéricos.
+_ADV_TO_HEADER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # NE8000 / VRP8 típico
+    re.compile(r"^\s*Advertised\s+to\s+such\s+\d+\s+peers?\s*:", re.I),
+    re.compile(r"^\s*Advertised\s+to\s+total\s+\d+\s+peers?\s*:", re.I),
+    # "Advertised to 14 peers" / "Advertised to 14 BGP peers" (sem "such")
+    re.compile(r"^\s*Advertised\s+to\s+\d+\s+(?:BGP\s+)?peers?\s*:", re.I),
+    re.compile(r"^\s*Advertised\s+to\s+(?:the\s+following|these)\s+peers?\s*:", re.I),
+    # Cabeçalho sem contagem — só lista de IPs nas linhas seguintes
+    re.compile(r"^\s*Advertised\s+to\s+peers?\s*:", re.I),
+)
+
+
+def _token_might_be_peer_ip(tok: str) -> str | None:
+    """Normaliza token (vírgulas, parênteses Huawei) e devolve IP válido ou None."""
+    t = (tok or "").strip().rstrip(",").strip()
+    if len(t) >= 2 and t[0] == "(" and t[-1] == ")":
+        t = t[1:-1].strip()
+    if not t:
+        return None
+    try:
+        ipaddress.ip_address(t)
+    except ValueError:
+        return None
+    return t
 
 
 def _parse_advertised_to_peers(detail_text: str) -> list[str]:
     """
-    Extrai peers da seção Huawei:
-      Advertised to such XX peers:
-         10.0.0.1
-         2001:db8::1
+    Extrai peers da secção Huawei (várias formulações entre versões VRP):
 
-    Não exige linha em branco após a lista (o regex antigo falhava quando o buffer
-    terminava logo após o último IP). Aceita IPv4/IPv6, uma por linha ou na mesma
-    linha após os dois pontos.
+      Advertised to such 14 peers:
+      Advertised to total 14 peers:
+      Advertised to 14 peers:
+      Advertised to 14 BGP peers:
+      Advertised to the following peers:
+      Advertised to peers:
+
+    Não exige linha em branco após a lista. IPv4/IPv6, uma por linha ou na mesma linha após ':'.
     """
     if not detail_text:
         return []
@@ -254,34 +281,29 @@ def _parse_advertised_to_peers(detail_text: str) -> list[str]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        if not _ADV_TO_HEADER.search(line):
+        if not any(p.search(line) for p in _ADV_TO_HEADER_PATTERNS):
             i += 1
             continue
         # IPs opcionais na mesma linha do cabeçalho (ex.: "...peers: 10.0.0.1")
         if ":" in line:
             after = line.split(":", 1)[1].strip()
             for tok in after.split():
-                t = tok.rstrip(",").strip()
-                if not t:
-                    continue
-                try:
-                    ipaddress.ip_address(t)
-                except ValueError:
+                ip = _token_might_be_peer_ip(tok)
+                if ip is None:
                     break
-                if t not in ips:
-                    ips.append(t)
+                if ip not in ips:
+                    ips.append(ip)
         i += 1
         while i < len(lines):
-            stripped = lines[i].strip().rstrip(",").strip()
+            stripped = lines[i].strip()
             if not stripped:
                 i += 1
                 break
-            try:
-                ipaddress.ip_address(stripped)
-            except ValueError:
+            ip = _token_might_be_peer_ip(stripped)
+            if ip is None:
                 break
-            if stripped not in ips:
-                ips.append(stripped)
+            if ip not in ips:
+                ips.append(ip)
             i += 1
     return ips
 

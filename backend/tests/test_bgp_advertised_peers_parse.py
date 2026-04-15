@@ -55,3 +55,45 @@ def test_parse_ips_on_same_line_as_header() -> None:
     text = "Foo\n Advertised to such 2 peers: 10.0.0.1 10.0.0.2\nBar\n"
     ips = _parse_advertised_to_peers(text)
     assert ips == ["10.0.0.1", "10.0.0.2"]
+
+
+def test_parse_total_N_peers_variant() -> None:
+    text = (
+        "BGP entry\n"
+        " Advertised to total 3 peers:\n"
+        "    192.0.2.1\n"
+        "    192.0.2.2\n"
+        "    2001:db8::1\n"
+    )
+    ips = _parse_advertised_to_peers(text)
+    assert ips == ["192.0.2.1", "192.0.2.2", "2001:db8::1"]
+
+
+def test_parse_N_bgp_peers_without_such() -> None:
+    text = " Advertised to 2 BGP peers:\n 10.0.0.1\n 10.0.0.2\nNext line\n"
+    ips = _parse_advertised_to_peers(text)
+    assert ips == ["10.0.0.1", "10.0.0.2"]
+
+
+def test_parse_the_following_peers_no_count() -> None:
+    text = " Advertised to the following peers:\n 10.1.1.1\n 10.1.1.2\n"
+    ips = _parse_advertised_to_peers(text)
+    assert ips == ["10.1.1.1", "10.1.1.2"]
+
+
+def test_parse_peers_only_header() -> None:
+    text = " Advertised to peers:\n 10.2.2.2\n"
+    ips = _parse_advertised_to_peers(text)
+    assert ips == ["10.2.2.2"]
+
+
+def test_parse_parentheses_around_ip() -> None:
+    text = " Advertised to such 1 peers:\n    (203.0.113.5)\n"
+    ips = _parse_advertised_to_peers(text)
+    assert ips == ["203.0.113.5"]
+
+
+def test_parse_these_peers_variant() -> None:
+    text = " Advertised to these peers:\n 198.51.100.1\n"
+    ips = _parse_advertised_to_peers(text)
+    assert ips == ["198.51.100.1"]
