@@ -26,6 +26,9 @@ Aplicação web para operação de rede com foco em Huawei VRP (NE8000), central
 - Clique no nome do dispositivo abre a view `Busca de Prefixo` (painel inline).
 - Clique em `BGP` abre tabela de peers.
 - Clique em `Interfaces` abre tabela de interfaces.
+- Clique em `Communities` (com permissão `communities.view`) abre o painel **por dispositivo**, no mesmo nível que Interfaces e BGP:
+  - **Biblioteca**: só `ip community-filter` (basic/advanced), campo `filter_name`. Sincronização: `POST …/communities/resync-from-config` (último backup) ou `POST …/communities/resync-live` (SSH). O resync **inativa** linhas na biblioteca que foram geradas por engano a partir de nomes de `ip community-list` (filtro com nome da lista + valores da lista, quando esse nome não é também um community-filter).
+  - **Community Sets**: `ip community-list`; cada membro tem `community_value` e liga à biblioteca só se existir `community-filter` com o **mesmo valor** (`missing_in_library` + alerta na UI se faltar). Apply bloqueado com ausentes até confirmação explícita extra (`acknowledge_missing_library_refs`). Sets importados são só leitura; clone gera rascunho `app_created`.
 
 ### Coleta e atualização
 

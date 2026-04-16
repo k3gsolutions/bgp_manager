@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Server, ChevronRight, ChevronDown,
-  Network, Filter, GitBranch, Plus, RefreshCw
+  Network, Filter, GitBranch, Plus, Tags,
 } from 'lucide-react'
+import { useAuth } from '../context/AuthContext.jsx'
 
-const VIEWS = [
+const VIEWS_BASE = [
   { key: 'interfaces', label: 'Interfaces', icon: GitBranch },
-  { key: 'bgp',        label: 'BGP',        icon: Network },
-  { key: 'filtros',    label: 'Filtros',    icon: Filter },
+  { key: 'bgp', label: 'BGP', icon: Network },
+  { key: 'filtros', label: 'Filtros', icon: Filter },
 ]
 
 // 'lookup' é a view padrão ao clicar no nome do dispositivo (não aparece como sub-item)
@@ -42,8 +43,17 @@ function groupDevicesForTree(devices) {
 }
 
 export default function DeviceTree({ devices, selected, onSelect, onNewDevice }) {
+  const { hasPermission } = useAuth()
   const [expandedClients, setExpandedClients] = useState({})
   const [expandedDevices, setExpandedDevices] = useState({})
+
+  const deviceViews = useMemo(() => {
+    const v = [...VIEWS_BASE]
+    if (hasPermission('communities.view')) {
+      v.push({ key: 'communities', label: 'Communities', icon: Tags })
+    }
+    return v
+  }, [hasPermission])
 
   const groups = groupDevicesForTree(devices)
 
@@ -153,7 +163,7 @@ export default function DeviceTree({ devices, selected, onSelect, onNewDevice })
                     </div>
 
                     {/* VIEWS (Interfaces, BGP, Filtros) */}
-                    {devExpanded && VIEWS.map(({ key, label, icon: Icon }) => {
+                    {devExpanded && deviceViews.map(({ key, label, icon: Icon }) => {
                       const isActive = isActiveDevice && selected?.view === key
                       return (
                         <button

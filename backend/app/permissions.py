@@ -28,6 +28,11 @@ PERMISSIONS: tuple[str, ...] = (
     "interfaces.view",
     "logs.view",
     "management.backup",
+    # Biblioteca e sets de BGP communities (Huawei VRP) — fase 1
+    "communities.view",
+    "communities.edit",
+    "communities.preview",
+    "communities.apply",
 )
 
 ALL_PERMISSIONS: FrozenSet[str] = frozenset(PERMISSIONS)
@@ -57,6 +62,10 @@ _ROLE_MATRIX: dict[str, FrozenSet[str]] = {
             "bgp.lookup",
             "interfaces.view",
             "logs.view",
+            "communities.view",
+            "communities.edit",
+            "communities.preview",
+            "communities.apply",
         }
     ),
     "operator": frozenset(
@@ -74,6 +83,9 @@ _ROLE_MATRIX: dict[str, FrozenSet[str]] = {
             "bgp.lookup",
             "interfaces.view",
             "logs.view",
+            "communities.view",
+            "communities.edit",
+            "communities.preview",
         }
     ),
     "viewer": frozenset(
@@ -84,6 +96,7 @@ _ROLE_MATRIX: dict[str, FrozenSet[str]] = {
             "bgp.view",
             "interfaces.view",
             "logs.view",
+            "communities.view",
         }
     ),
 }

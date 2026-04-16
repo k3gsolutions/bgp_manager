@@ -9,6 +9,7 @@ import InterfacesPanel from './pages/InterfacesPanel.jsx'
 import BGPPanel from './pages/BGPPanel.jsx'
 import BgpLookupPanel from './pages/BgpLookupPanel.jsx'
 import FiltrosPanel from './pages/FiltrosPanel.jsx'
+import CommunitiesPanel from './pages/CommunitiesPanel.jsx'
 import LogPanel from './pages/LogPanel.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import CompaniesPage from './pages/CompaniesPage.jsx'
@@ -57,6 +58,7 @@ function AppAuthenticated() {
         interfaces: 'Interfaces',
         bgp: 'BGP',
         filtros: 'Filtros',
+        communities: 'Communities',
         lookup: 'Busca de Prefixo',
       }[selected.view] || ''
       const items = [
@@ -129,6 +131,9 @@ function AppAuthenticated() {
           )}
           {showDevicePanel && selected.view === 'filtros' && (
             <FiltrosPanel device={selected.device} />
+          )}
+          {showDevicePanel && selected.view === 'communities' && (
+            <CommunitiesPanel device={selected.device} />
           )}
         </main>
       </div>

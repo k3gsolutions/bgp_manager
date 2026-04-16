@@ -36,6 +36,10 @@ Permissões mínimas:
 * `bgp.lookup`
 * `interfaces.view`
 * `logs.view`
+* `communities.view` (biblioteca e sets por dispositivo)
+* `communities.edit` (sincronizar biblioteca, CRUD de sets em rascunho)
+* `communities.preview` (gerar candidato VRP antes de aplicar)
+* `communities.apply` (SSH + commit no roteador — tipicamente admin/superadmin)
 
 Criar routers:
 

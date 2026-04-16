@@ -10,6 +10,13 @@ Formato sugerido:
 
 ## 2026-04-15
 
+### Backend / Frontend — Communities (Huawei NE8000 VRP)
+- **Biblioteca** = só ``ip community-filter`` (basic/advanced); coluna ``filter_name`` (antes ``name``). **Community Sets** = ``ip community-list``; cada membro guarda ``community_value``, ``linked_library_item_id`` opcional e ``missing_in_library`` se não existir filtro com o mesmo valor — **não** se criam linhas fictícias na biblioteca a partir da lista.
+- Resync: inativa linhas na biblioteca onde o ``filter_name`` coincide com um ``ip community-list`` e o valor pertence a essa lista (importação errada corrigida).
+- Preview inclui aviso + lista de valores ausentes; apply exige ``acknowledge_missing_library_refs`` quando há ausentes (checkbox explícito no modal).
+- Parser: linha `` community VALUE texto-extra`` → ``value_description`` no membro.
+- Migração BD: membros de set por valor; rename ``name`` → ``filter_name``; índices/constraints actualizados.
+
 ### Backend — CORS
 - Ordem dos middlewares: ``UserAuditMiddleware`` primeiro, ``CORSMiddleware`` por último (FastAPI insere no índice 0 — o CORS fica mais externo e trata preflight/cabeçalhos antes do audit).
 - ``allow_origin_regex`` (localhost / RFC1918 + qualquer porta) activo em **todos** os ambientes excepto ``APP_ENV=production``, alinhando ``test``/CI ao comportamento de desenvolvimento. Evita preflight falhar quando o Vite abre por IP da LAN e ``VITE_API_URL=http://127.0.0.1:8000`` (o navegador mostrava «sem resposta»).

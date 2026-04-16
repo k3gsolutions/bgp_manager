@@ -506,6 +506,644 @@ def _sync_apply_schema_patches(connection) -> None:
                     text("ALTER TABLE interfaces ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ NULL")
                 )
 
+    # ── BGP Communities (fase 1): biblioteca, sets, membros, auditoria ─────────
+    if insp.has_table("devices") and not insp.has_table("community_library_items"):
+        if dialect == "sqlite":
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_library_items (
+                        id INTEGER PRIMARY KEY,
+                        device_id INTEGER NOT NULL,
+                        company_id INTEGER NOT NULL,
+                        filter_name VARCHAR(128) NOT NULL,
+                        community_value VARCHAR(512) NOT NULL,
+                        match_type VARCHAR(16) NOT NULL,
+                        action VARCHAR(8) NOT NULL DEFAULT 'permit',
+                        index_order INTEGER,
+                        origin VARCHAR(16) NOT NULL DEFAULT 'discovered',
+                        description TEXT,
+                        tags_json TEXT,
+                        is_system BOOLEAN NOT NULL DEFAULT 0,
+                        is_active BOOLEAN NOT NULL DEFAULT 1,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        FOREIGN KEY(device_id) REFERENCES devices (id) ON DELETE CASCADE,
+                        FOREIGN KEY(company_id) REFERENCES companies (id),
+                        CONSTRAINT uq_community_lib_device_filter_value_match
+                            UNIQUE (device_id, filter_name, community_value, match_type)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_sets (
+                        id INTEGER PRIMARY KEY,
+                        device_id INTEGER NOT NULL,
+                        company_id INTEGER NOT NULL,
+                        name VARCHAR(200) NOT NULL,
+                        slug VARCHAR(120) NOT NULL,
+                        vrp_object_name VARCHAR(63) NOT NULL,
+                        origin VARCHAR(16) NOT NULL DEFAULT 'manual',
+                        discovered_members_json TEXT,
+                        description TEXT,
+                        status VARCHAR(32) NOT NULL DEFAULT 'draft',
+                        created_by INTEGER,
+                        updated_by INTEGER,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        FOREIGN KEY(device_id) REFERENCES devices (id) ON DELETE CASCADE,
+                        FOREIGN KEY(company_id) REFERENCES companies (id),
+                        FOREIGN KEY(created_by) REFERENCES users (id) ON DELETE SET NULL,
+                        FOREIGN KEY(updated_by) REFERENCES users (id) ON DELETE SET NULL,
+                        CONSTRAINT uq_community_set_device_slug UNIQUE (device_id, slug),
+                        CONSTRAINT uq_community_set_device_vrp_name UNIQUE (device_id, vrp_object_name)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_set_members (
+                        id INTEGER PRIMARY KEY,
+                        community_set_id INTEGER NOT NULL,
+                        community_value VARCHAR(512) NOT NULL,
+                        linked_library_item_id INTEGER,
+                        missing_in_library BOOLEAN NOT NULL DEFAULT 0,
+                        value_description TEXT,
+                        position INTEGER NOT NULL DEFAULT 0,
+                        FOREIGN KEY(community_set_id) REFERENCES community_sets (id) ON DELETE CASCADE,
+                        FOREIGN KEY(linked_library_item_id) REFERENCES community_library_items (id) ON DELETE SET NULL,
+                        CONSTRAINT uq_set_member_set_value UNIQUE (community_set_id, community_value)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_change_audit (
+                        id INTEGER PRIMARY KEY,
+                        device_id INTEGER NOT NULL,
+                        community_set_id INTEGER,
+                        user_id INTEGER,
+                        action VARCHAR(16) NOT NULL,
+                        candidate_config_text TEXT NOT NULL DEFAULT '',
+                        command_sent_text TEXT,
+                        device_response_text TEXT,
+                        status VARCHAR(16) NOT NULL,
+                        created_at DATETIME,
+                        FOREIGN KEY(device_id) REFERENCES devices (id) ON DELETE CASCADE,
+                        FOREIGN KEY(community_set_id) REFERENCES community_sets (id) ON DELETE SET NULL,
+                        FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE SET NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_comm_lib_device ON community_library_items (device_id)")
+            )
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_comm_sets_device ON community_sets (device_id)"))
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_comm_audit_device ON community_change_audit (device_id)")
+            )
+        else:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_library_items (
+                        id SERIAL PRIMARY KEY,
+                        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                        company_id INTEGER NOT NULL REFERENCES companies(id),
+                        filter_name VARCHAR(128) NOT NULL,
+                        community_value VARCHAR(512) NOT NULL,
+                        match_type VARCHAR(16) NOT NULL,
+                        action VARCHAR(8) NOT NULL DEFAULT 'permit',
+                        index_order INTEGER,
+                        origin VARCHAR(16) NOT NULL DEFAULT 'discovered',
+                        description TEXT,
+                        tags_json JSONB,
+                        is_system BOOLEAN NOT NULL DEFAULT false,
+                        is_active BOOLEAN NOT NULL DEFAULT true,
+                        created_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ,
+                        CONSTRAINT uq_community_lib_device_filter_value_match
+                            UNIQUE (device_id, filter_name, community_value, match_type)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_sets (
+                        id SERIAL PRIMARY KEY,
+                        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                        company_id INTEGER NOT NULL REFERENCES companies(id),
+                        name VARCHAR(200) NOT NULL,
+                        slug VARCHAR(120) NOT NULL,
+                        vrp_object_name VARCHAR(63) NOT NULL,
+                        origin VARCHAR(16) NOT NULL DEFAULT 'manual',
+                        discovered_members_json JSONB,
+                        description TEXT,
+                        status VARCHAR(32) NOT NULL DEFAULT 'draft',
+                        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        created_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ,
+                        CONSTRAINT uq_community_set_device_slug UNIQUE (device_id, slug),
+                        CONSTRAINT uq_community_set_device_vrp_name UNIQUE (device_id, vrp_object_name)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_set_members (
+                        id SERIAL PRIMARY KEY,
+                        community_set_id INTEGER NOT NULL REFERENCES community_sets(id) ON DELETE CASCADE,
+                        community_value VARCHAR(512) NOT NULL,
+                        linked_library_item_id INTEGER REFERENCES community_library_items(id) ON DELETE SET NULL,
+                        missing_in_library BOOLEAN NOT NULL DEFAULT false,
+                        value_description TEXT,
+                        position INTEGER NOT NULL DEFAULT 0,
+                        CONSTRAINT uq_set_member_set_value UNIQUE (community_set_id, community_value)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_change_audit (
+                        id SERIAL PRIMARY KEY,
+                        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                        community_set_id INTEGER REFERENCES community_sets(id) ON DELETE SET NULL,
+                        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        action VARCHAR(16) NOT NULL,
+                        candidate_config_text TEXT NOT NULL DEFAULT '',
+                        command_sent_text TEXT,
+                        device_response_text TEXT,
+                        status VARCHAR(16) NOT NULL,
+                        created_at TIMESTAMPTZ
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_comm_lib_device ON community_library_items (device_id)")
+            )
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_comm_sets_device ON community_sets (device_id)"))
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_comm_audit_device ON community_change_audit (device_id)")
+            )
+
+    # ip community-list (grupos) — snapshot por dispositivo
+    if insp.has_table("devices") and not insp.has_table("device_community_lists"):
+        if dialect == "sqlite":
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE device_community_lists (
+                        id INTEGER PRIMARY KEY,
+                        device_id INTEGER NOT NULL,
+                        company_id INTEGER NOT NULL,
+                        list_name VARCHAR(128) NOT NULL,
+                        communities_json TEXT NOT NULL,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        FOREIGN KEY(device_id) REFERENCES devices (id) ON DELETE CASCADE,
+                        FOREIGN KEY(company_id) REFERENCES companies (id),
+                        CONSTRAINT uq_device_community_list_name UNIQUE (device_id, list_name)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_dev_comm_list_device ON device_community_lists (device_id)")
+            )
+        else:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE device_community_lists (
+                        id SERIAL PRIMARY KEY,
+                        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                        company_id INTEGER NOT NULL REFERENCES companies(id),
+                        list_name VARCHAR(128) NOT NULL,
+                        communities_json JSONB NOT NULL,
+                        created_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ,
+                        CONSTRAINT uq_device_community_list_name UNIQUE (device_id, list_name)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_dev_comm_list_device ON device_community_lists (device_id)")
+            )
+
+    if insp.has_table("community_sets"):
+        cs_cols = {c["name"] for c in insp.get_columns("community_sets")}
+        if "origin" not in cs_cols:
+            if dialect == "sqlite":
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_sets ADD COLUMN origin VARCHAR(16) NOT NULL DEFAULT 'manual'"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_sets ADD COLUMN IF NOT EXISTS origin VARCHAR(16) NOT NULL DEFAULT 'manual'"
+                    )
+                )
+        if "discovered_members_json" not in cs_cols:
+            if dialect == "sqlite":
+                connection.execute(
+                    text("ALTER TABLE community_sets ADD COLUMN discovered_members_json TEXT")
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_sets ADD COLUMN IF NOT EXISTS discovered_members_json JSONB"
+                    )
+                )
+        if "is_active" not in cs_cols:
+            if dialect == "sqlite":
+                connection.execute(
+                    text("ALTER TABLE community_sets ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_sets ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true"
+                    )
+                )
+                connection.execute(text("UPDATE community_sets SET is_active = true WHERE is_active IS NULL"))
+
+    # Communities v2: biblioteca ``filter_name``; membros do set por ``community_value`` + vínculo opcional
+    if insp.has_table("community_library_items"):
+        lib_cols_v2 = {c["name"] for c in insp.get_columns("community_library_items")}
+        if "filter_name" not in lib_cols_v2 and "name" in lib_cols_v2:
+            if dialect == "sqlite":
+                connection.execute(text("ALTER TABLE community_library_items RENAME COLUMN name TO filter_name"))
+            else:
+                connection.execute(text("ALTER TABLE community_library_items RENAME COLUMN name TO filter_name"))
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_library_items DROP CONSTRAINT IF EXISTS "
+                        "uq_community_lib_device_name_value_match"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_library_items ADD CONSTRAINT uq_community_lib_device_filter_value_match "
+                        "UNIQUE (device_id, filter_name, community_value, match_type)"
+                    )
+                )
+
+    if insp.has_table("community_set_members"):
+        mcols_v2 = {c["name"] for c in insp.get_columns("community_set_members")}
+        if "community_library_item_id" in mcols_v2 and "community_value" not in mcols_v2:
+            if dialect == "sqlite":
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members ADD COLUMN community_value VARCHAR(512) NOT NULL DEFAULT ''"
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        UPDATE community_set_members SET community_value = (
+                            SELECT COALESCE(l.community_value, '')
+                            FROM community_library_items l
+                            WHERE l.id = community_set_members.community_library_item_id
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text("ALTER TABLE community_set_members ADD COLUMN linked_library_item_id INTEGER")
+                )
+                connection.execute(
+                    text(
+                        "UPDATE community_set_members SET linked_library_item_id = community_library_item_id"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members ADD COLUMN missing_in_library BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+                connection.execute(text("ALTER TABLE community_set_members ADD COLUMN value_description TEXT"))
+                connection.execute(
+                    text(
+                        """
+                        UPDATE community_set_members SET missing_in_library = 1
+                        WHERE linked_library_item_id IS NULL
+                           OR TRIM(community_value) = ''
+                           OR NOT EXISTS (
+                               SELECT 1 FROM community_library_items li
+                               WHERE li.id = community_set_members.linked_library_item_id
+                                 AND li.match_type IN ('basic', 'advanced')
+                           )
+                        """
+                    )
+                )
+                connection.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_set_member_linked ON community_set_members (linked_library_item_id)")
+                )
+                # SQLite antigo pode não suportar DROP COLUMN; nesse caso recriamos a tabela no layout v2.
+                try:
+                    connection.execute(
+                        text("ALTER TABLE community_set_members DROP COLUMN community_library_item_id")
+                    )
+                    connection.execute(text("DROP INDEX IF EXISTS uq_set_member_unique_item"))
+                    connection.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_set_member_set_value "
+                            "ON community_set_members (community_set_id, community_value)"
+                        )
+                    )
+                except Exception:
+                    connection.execute(text("PRAGMA foreign_keys=OFF"))
+                    connection.execute(
+                        text(
+                            """
+                            CREATE TABLE IF NOT EXISTS community_set_members_v2 (
+                                id INTEGER PRIMARY KEY,
+                                community_set_id INTEGER NOT NULL,
+                                community_value VARCHAR(512) NOT NULL,
+                                linked_library_item_id INTEGER,
+                                missing_in_library BOOLEAN NOT NULL DEFAULT 0,
+                                value_description TEXT,
+                                position INTEGER NOT NULL DEFAULT 0,
+                                FOREIGN KEY(community_set_id) REFERENCES community_sets (id) ON DELETE CASCADE,
+                                FOREIGN KEY(linked_library_item_id) REFERENCES community_library_items (id) ON DELETE SET NULL,
+                                CONSTRAINT uq_set_member_set_value UNIQUE (community_set_id, community_value)
+                            )
+                            """
+                        )
+                    )
+                    connection.execute(
+                        text(
+                            """
+                            INSERT OR REPLACE INTO community_set_members_v2
+                                (id, community_set_id, community_value, linked_library_item_id, missing_in_library, value_description, position)
+                            SELECT
+                                id,
+                                community_set_id,
+                                COALESCE(NULLIF(TRIM(community_value), ''), '[unknown]'),
+                                linked_library_item_id,
+                                COALESCE(missing_in_library, 0),
+                                value_description,
+                                COALESCE(position, 0)
+                            FROM community_set_members
+                            """
+                        )
+                    )
+                    connection.execute(text("DROP TABLE community_set_members"))
+                    connection.execute(text("ALTER TABLE community_set_members_v2 RENAME TO community_set_members"))
+                    connection.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_set_member_linked ON community_set_members (linked_library_item_id)"
+                        )
+                    )
+                    connection.execute(text("PRAGMA foreign_keys=ON"))
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members ADD COLUMN IF NOT EXISTS community_value VARCHAR(512) NOT NULL DEFAULT ''"
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        UPDATE community_set_members AS m SET community_value = COALESCE(
+                            (SELECT l.community_value FROM community_library_items l WHERE l.id = m.community_library_item_id),
+                            ''
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members ADD COLUMN IF NOT EXISTS linked_library_item_id INTEGER REFERENCES community_library_items(id) ON DELETE SET NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "UPDATE community_set_members SET linked_library_item_id = community_library_item_id "
+                        "WHERE community_library_item_id IS NOT NULL"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members ADD COLUMN IF NOT EXISTS missing_in_library BOOLEAN NOT NULL DEFAULT false"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members ADD COLUMN IF NOT EXISTS value_description TEXT"
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        UPDATE community_set_members m SET missing_in_library = true
+                        WHERE m.linked_library_item_id IS NULL
+                           OR TRIM(m.community_value) = ''
+                           OR NOT EXISTS (
+                               SELECT 1 FROM community_library_items li
+                               WHERE li.id = m.linked_library_item_id
+                                 AND li.match_type IN ('basic', 'advanced')
+                           )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members DROP CONSTRAINT IF EXISTS uq_set_member_unique_item"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members DROP COLUMN IF EXISTS community_library_item_id"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_set_members ADD CONSTRAINT uq_set_member_set_value "
+                        "UNIQUE (community_set_id, community_value)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_set_member_linked ON community_set_members (linked_library_item_id)"
+                    )
+                )
+        # Estado híbrido (migração parcial): coluna antiga ainda existe e quebra inserts novos.
+        if dialect == "sqlite":
+            mcols_now = {c["name"] for c in inspect(connection).get_columns("community_set_members")}
+            if "community_library_item_id" in mcols_now and "community_value" in mcols_now:
+                connection.execute(text("PRAGMA foreign_keys=OFF"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS community_set_members_v2 (
+                            id INTEGER PRIMARY KEY,
+                            community_set_id INTEGER NOT NULL,
+                            community_value VARCHAR(512) NOT NULL,
+                            linked_library_item_id INTEGER,
+                            missing_in_library BOOLEAN NOT NULL DEFAULT 0,
+                            value_description TEXT,
+                            position INTEGER NOT NULL DEFAULT 0,
+                            FOREIGN KEY(community_set_id) REFERENCES community_sets (id) ON DELETE CASCADE,
+                            FOREIGN KEY(linked_library_item_id) REFERENCES community_library_items (id) ON DELETE SET NULL,
+                            CONSTRAINT uq_set_member_set_value UNIQUE (community_set_id, community_value)
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT OR REPLACE INTO community_set_members_v2
+                            (id, community_set_id, community_value, linked_library_item_id, missing_in_library, value_description, position)
+                        SELECT
+                            id,
+                            community_set_id,
+                            COALESCE(
+                                NULLIF(TRIM(community_value), ''),
+                                (SELECT COALESCE(li.community_value, '[unknown]')
+                                 FROM community_library_items li
+                                 WHERE li.id = community_set_members.community_library_item_id),
+                                '[unknown]'
+                            ),
+                            linked_library_item_id,
+                            COALESCE(missing_in_library, 0),
+                            value_description,
+                            COALESCE(position, 0)
+                        FROM community_set_members
+                        """
+                    )
+                )
+                connection.execute(text("DROP TABLE community_set_members"))
+                connection.execute(text("ALTER TABLE community_set_members_v2 RENAME TO community_set_members"))
+                connection.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_set_member_linked ON community_set_members (linked_library_item_id)"
+                    )
+                )
+                connection.execute(text("PRAGMA foreign_keys=ON"))
+
+    if insp.has_table("community_library_items"):
+        lib_cols = {c["name"] for c in insp.get_columns("community_library_items")}
+        if "is_active" not in lib_cols:
+            if dialect == "sqlite":
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_library_items ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "ALTER TABLE community_library_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true"
+                    )
+                )
+                connection.execute(
+                    text("UPDATE community_library_items SET is_active = true WHERE is_active IS NULL")
+                )
+
+    if insp.has_table("devices") and not insp.has_table("community_sync_audit"):
+        if dialect == "sqlite":
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_sync_audit (
+                        id INTEGER PRIMARY KEY,
+                        device_id INTEGER NOT NULL,
+                        user_id INTEGER,
+                        source VARCHAR(24) NOT NULL,
+                        action VARCHAR(24) NOT NULL,
+                        details_json TEXT,
+                        status VARCHAR(16) NOT NULL,
+                        created_at DATETIME,
+                        FOREIGN KEY(device_id) REFERENCES devices (id) ON DELETE CASCADE,
+                        FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE SET NULL
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_comm_sync_audit_device ON community_sync_audit (device_id)")
+            )
+        else:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE community_sync_audit (
+                        id SERIAL PRIMARY KEY,
+                        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        source VARCHAR(24) NOT NULL,
+                        action VARCHAR(24) NOT NULL,
+                        details_json JSONB,
+                        status VARCHAR(16) NOT NULL,
+                        created_at TIMESTAMPTZ
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_comm_sync_audit_device ON community_sync_audit (device_id)")
+            )
+
+    if dialect == "postgresql":
+        for tbl in ("community_library_items", "community_sets"):
+            if not insp.has_table(tbl):
+                continue
+            row = connection.execute(
+                text(
+                    """
+                    SELECT character_maximum_length
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = :t
+                      AND column_name = 'origin'
+                    """
+                ),
+                {"t": tbl},
+            ).fetchone()
+            ml = row[0] if row else None
+            if ml is not None and ml < 40:
+                connection.execute(text(f'ALTER TABLE "{tbl}" ALTER COLUMN origin TYPE VARCHAR(40)'))
+
+    # Migração de rótulos de origem/status (communities Huawei)
+    if insp.has_table("community_sets"):
+        connection.execute(
+            text("UPDATE community_sets SET origin = 'app_created' WHERE origin = 'manual'")
+        )
+        connection.execute(
+            text(
+                "UPDATE community_sets SET origin = 'discovered_running_config' WHERE origin = 'discovered'"
+            )
+        )
+        connection.execute(text("UPDATE community_sets SET status = 'imported' WHERE status = 'read_only'"))
+    if insp.has_table("community_library_items"):
+        connection.execute(
+            text(
+                "UPDATE community_library_items SET origin = 'discovered_running_config' "
+                "WHERE origin = 'discovered' AND match_type IN ('basic', 'advanced')"
+            )
+        )
+
     # Cada dispositivo é uma entidade: interfaces e peers não se misturam entre devices.
     _try_create_device_scoped_unique_index(
         connection,
@@ -558,6 +1196,14 @@ def _sync_postgresql_naive_timestamp_to_timestamptz(connection) -> None:
         ("device_vrfs", "last_seen_at"),
         ("inventory_history", "created_at"),
         ("prefix_lookup_history", "created_at"),
+        ("community_library_items", "created_at"),
+        ("community_library_items", "updated_at"),
+        ("community_sets", "created_at"),
+        ("community_sets", "updated_at"),
+        ("community_change_audit", "created_at"),
+        ("device_community_lists", "created_at"),
+        ("device_community_lists", "updated_at"),
+        ("community_sync_audit", "created_at"),
     ]
     for table, column in pairs:
         if not insp.has_table(table):
