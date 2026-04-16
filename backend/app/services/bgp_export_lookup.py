@@ -84,7 +84,8 @@ _RE_LOCAL_PREF = re.compile(r"(?:Local-Pref|Local Preference|LocalPref)\s*[：:]
 _RE_MED = re.compile(r"\bMED\s*[：:]\s*(\d+)", re.IGNORECASE)
 _RE_ORIGIN = re.compile(r"\bOrigin\s*[：:]?\s*(igp|egp|\?)", re.IGNORECASE)
 _RE_NEXTHOP = re.compile(r"(?:Nexthop|NextHop|Next-hop)\s*[：:]\s*([\d.]+)", re.IGNORECASE)
-_RE_FROM = re.compile(r"\bFrom\s*[：:]\s*([\d.]+)", re.IGNORECASE)
+# Primeiro token após From: (IPv4, IPv6, ou 0.0.0.0 em rotas locais — filtrado depois).
+_RE_FROM = re.compile(r"\bFrom\s*[：:\uFF1A]\s*(\S+)", re.IGNORECASE)
 _RE_COMMUNITY_STD = re.compile(r"^\s*Community\s*[：:]?\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 _RE_COMMUNITY_EXT = re.compile(r"^\s*(?:Ext-Community|ExtCommunity)\s*[：:]?\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 _RE_COMMUNITY_LARGE = re.compile(r"^\s*(?:Large-Community|LargeCommunity)\s*[：:]?\s*(.+)$", re.IGNORECASE | re.MULTILINE)
@@ -114,6 +115,27 @@ def _parse_community_tokens(raw_line: str) -> list[str]:
         if kw.lower() in raw_line.lower() and kw not in tokens:
             tokens.append(kw)
     return tokens
+
+
+def _sanitize_bgp_from_peer_ip(raw: str | None) -> str | None:
+    """
+    ``From:`` no detalhe BGP — ``0.0.0.0`` / ``::`` indicam rota local/agregada, não um peer.
+    Evita ``display bgp peer 0.0.0.0 verbose`` e histórico com from_peer_ip falso.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip().strip("[]").split("(", 1)[0].strip()
+    if not s:
+        return None
+    try:
+        addr = ipaddress.ip_address(s)
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv4Address) and int(addr) == 0:
+        return None
+    if isinstance(addr, ipaddress.IPv6Address) and addr.is_unspecified:
+        return None
+    return str(addr)
 
 
 def _parse_all_communities(text: str) -> tuple[list[str], list[str], list[str]]:
@@ -149,7 +171,7 @@ def _parse_detail_block(text: str) -> dict[str, Any]:
     med_s = _first(_RE_MED, text)
     origin = _first(_RE_ORIGIN, text)
     nexthop = _first(_RE_NEXTHOP, text)
-    from_ip = _first(_RE_FROM, text)
+    from_ip = _sanitize_bgp_from_peer_ip(_first(_RE_FROM, text))
     std, ext, large = _parse_all_communities(text)
 
     nums = re.findall(r"\b(\d+)\b", as_path or "")
@@ -317,6 +339,41 @@ def _parse_advertised_to_peers(detail_text: str) -> list[str]:
     return ips
 
 
+def _parse_advertised_to_peers_relaxed(text: str) -> list[str]:
+    """
+    Fallback quando os cabeçalhos estritos não casam (espaços/labels ligeiramente diferentes no VRP).
+    Procura uma linha com ``advertised`` + ``peer`` + ``:`` e lê linhas seguintes só-IP.
+    """
+    t = _normalize_huawei_cli_text(text or "")
+    if not t or "advertised" not in t.lower() or "peer" not in t.lower():
+        return []
+    ips: list[str] = []
+    lines = t.split("\n")
+    mode = "seek_header"
+    for line in lines:
+        stripped = line.strip()
+        if mode == "seek_header":
+            if not stripped or ":" not in stripped:
+                continue
+            if not re.search(r"advertised\s+to", stripped, re.I) or "peer" not in stripped.lower():
+                continue
+            after = stripped.split(":", 1)[1].strip()
+            for tok in after.split():
+                ip = _token_might_be_peer_ip(tok)
+                if ip and ip not in ips:
+                    ips.append(ip)
+            mode = "collect_ips"
+            continue
+        if not stripped:
+            break
+        ip = _token_might_be_peer_ip(stripped)
+        if ip is None:
+            break
+        if ip not in ips:
+            ips.append(ip)
+    return ips
+
+
 def _ssh_text_for_advertised_peers(detail_out: str, basic_out: str) -> str:
     """
     Junta passo1 + passo2 para o parser (routing-table simples PRIMEIRO).
@@ -345,13 +402,14 @@ def advertised_peer_ips_from_huawei_routing_outputs(
     b = _normalize_huawei_cli_text(basic_out or "")
     d = _normalize_huawei_cli_text(detail_out or "")
     merged = _ssh_text_for_advertised_peers(d, b)
-    ips = _parse_advertised_to_peers(merged)
-    if ips:
-        return ips
-    ips = _parse_advertised_to_peers(b)
-    if ips:
-        return ips
-    return _parse_advertised_to_peers(d)
+    for parser in (_parse_advertised_to_peers, _parse_advertised_to_peers_relaxed):
+        for blob in (merged, b, d):
+            if not blob:
+                continue
+            ips = parser(blob)
+            if ips:
+                return ips
+    return []
 
 
 def _peer_address_family(peer_ip: str) -> str:
@@ -408,6 +466,7 @@ def _step2_detail(conn, prefix: str, plen: int, log: list[str], *, explicit_cidr
 
 def _step3_peer_verbose(conn, peer_ip: str, log: list[str]) -> dict[str, Any]:
     """Passo 3 — info do peer (description, AS, route-policy) via verbose IPv4 ou IPv6."""
+    peer_ip = _sanitize_bgp_from_peer_ip(peer_ip) or ""
     if not peer_ip:
         return {}
     fam = _peer_address_family(peer_ip)
@@ -609,7 +668,13 @@ def _investigate(
                 prepend = True
 
         # Passo 3 — peer origem: preferir dados do banco (SNMP); SSH verbose só se não houver hint.
-        from_peer_ip = best_attrs.get("from_peer_ip")
+        raw_from = best_attrs.get("from_peer_ip")
+        from_peer_ip = _sanitize_bgp_from_peer_ip(raw_from)
+        if raw_from and not from_peer_ip:
+            emit(
+                log,
+                f"Ignorado From: sintético/local ({raw_from!r}) — não é peer BGP; sem verbose SSH.",
+            )
         from_peer: dict[str, Any] = {}
         if from_peer_ip:
             hint = peer_hints.get(from_peer_ip) if peer_hints else None

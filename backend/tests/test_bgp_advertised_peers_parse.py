@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from app.services.bgp_export_lookup import (
     _parse_advertised_to_peers,
+    _parse_advertised_to_peers_relaxed,
+    _parse_detail_block,
+    _sanitize_bgp_from_peer_ip,
     _ssh_text_for_advertised_peers,
     advertised_peer_ips_from_huawei_routing_outputs,
 )
@@ -119,3 +122,23 @@ def test_ssh_merge_basic_then_detail() -> None:
     merged = _ssh_text_for_advertised_peers("LINE_DETAIL\n", "LINE_BASIC\n")
     assert merged.split("\n")[0] == "LINE_BASIC"
     assert merged.split("\n")[1] == "LINE_DETAIL"
+
+
+def test_sanitize_from_peer_rejects_null() -> None:
+    assert _sanitize_bgp_from_peer_ip("0.0.0.0") is None
+    assert _sanitize_bgp_from_peer_ip("0.0.0.0(0.0.0.0)") is None
+    assert _sanitize_bgp_from_peer_ip("::") is None
+    assert _sanitize_bgp_from_peer_ip("10.1.1.1") == "10.1.1.1"
+
+
+def test_parse_detail_from_local_route() -> None:
+    text = "From: 0.0.0.0 (0.0.0.0)\n AS-path Nil, origin igp\n"
+    out = _parse_detail_block(text)
+    assert out.get("from_peer_ip") is None
+
+
+def test_relaxed_parser_variant_header() -> None:
+    # Cabeçalho que não casa com os regex estritos (há texto entre "peer" e ":") — relaxed ainda apanha
+    text = "Foo\n Advertised to 14 peer neighbors:\n10.0.0.1\n10.0.0.2\n"
+    assert not _parse_advertised_to_peers(text)
+    assert _parse_advertised_to_peers_relaxed(text) == ["10.0.0.1", "10.0.0.2"]
