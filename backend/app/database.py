@@ -1171,6 +1171,47 @@ def _sync_apply_schema_patches(connection) -> None:
         group_by_sql="device_id, peer_ip, vrf_name",
     )
 
+    # ── System updates (update remoto via Docker) ─────────────────────────────
+    if not insp.has_table("system_update_history"):
+        if dialect == "sqlite":
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE system_update_history (
+                        id INTEGER PRIMARY KEY,
+                        from_version VARCHAR(64) NOT NULL,
+                        to_version VARCHAR(64) NOT NULL,
+                        update_type VARCHAR(16) NOT NULL,
+                        triggered_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        mode VARCHAR(24) NOT NULL,
+                        status VARCHAR(24) NOT NULL,
+                        log_text TEXT NOT NULL DEFAULT '',
+                        created_at DATETIME,
+                        finished_at DATETIME
+                    )
+                    """
+                )
+            )
+        else:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS system_update_history (
+                        id SERIAL PRIMARY KEY,
+                        from_version VARCHAR(64) NOT NULL,
+                        to_version VARCHAR(64) NOT NULL,
+                        update_type VARCHAR(16) NOT NULL,
+                        triggered_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                        mode VARCHAR(24) NOT NULL,
+                        status VARCHAR(24) NOT NULL,
+                        log_text TEXT NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ,
+                        finished_at TIMESTAMPTZ
+                    )
+                    """
+                )
+            )
+
 
 def _sync_postgresql_naive_timestamp_to_timestamptz(connection) -> None:
     """

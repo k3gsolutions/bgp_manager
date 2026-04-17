@@ -23,6 +23,8 @@ backend/logs/
 backend/*.db
 backend/*.sqlite
 backend/*.sqlite3
+bgpmanager.db
+backups/
 
 # Frontend
 frontend/node_modules/

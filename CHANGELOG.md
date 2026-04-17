@@ -17,6 +17,12 @@ Formato sugerido:
 - Parser: linha `` community VALUE texto-extra`` → ``value_description`` no membro.
 - Migração BD: membros de set por valor; rename ``name`` → ``filter_name``; índices/constraints actualizados.
 
+### Backend / Frontend — Updates remotos seguros (System Updater)
+- Atualização remota baseada em GitHub Releases + imagem versionada no GHCR (sem `latest` cego).
+- Updater em processo separado recria o container via Docker, valida health-check (`GET /health`) e faz rollback se falhar.
+- Endpoints: `GET /api/system/version`, `GET /api/system/update-status`, `POST /api/system/check-update`, `POST /api/system/apply-update`, `POST /api/system/rollback-update`, `GET /api/system/update-history`.
+- UI em `Gerenciamento` passa a exibir tipo de update, resumo do changelog e permite check/apply/rollback com histórico.
+
 ### Backend — CORS
 - Ordem dos middlewares: ``UserAuditMiddleware`` primeiro, ``CORSMiddleware`` por último (FastAPI insere no índice 0 — o CORS fica mais externo e trata preflight/cabeçalhos antes do audit).
 - ``allow_origin_regex`` (localhost / RFC1918 + qualquer porta) activo em **todos** os ambientes excepto ``APP_ENV=production``, alinhando ``test``/CI ao comportamento de desenvolvimento. Evita preflight falhar quando o Vite abre por IP da LAN e ``VITE_API_URL=http://127.0.0.1:8000`` (o navegador mostrava «sem resposta»).

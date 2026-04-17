@@ -33,10 +33,15 @@ export default function ManagementPage() {
   const [busyExport, setBusyExport] = useState(false)
   const [busyImport, setBusyImport] = useState(false)
   const [busyCheckUpdate, setBusyCheckUpdate] = useState(false)
-  const [busyRunUpdate, setBusyRunUpdate] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
-  const [updateInfo, setUpdateInfo] = useState(null)
+  const [busyApplyUpdate, setBusyApplyUpdate] = useState(false)
+  const [busyRollbackUpdate, setBusyRollbackUpdate] = useState(false)
+
+  const [currentVersion, setCurrentVersion] = useState('—')
+  const [checkInfo, setCheckInfo] = useState(null)
+  const [updateStatus, setUpdateStatus] = useState(null)
+  const [history, setHistory] = useState([])
 
   async function handleExport() {
     setErr('')
@@ -54,12 +59,27 @@ export default function ManagementPage() {
     }
   }
 
-  async function loadUpdateStatus() {
+  async function loadSystemVersion() {
     try {
-      const data = await managementApi.getUpdateStatus()
-      setUpdateInfo(data)
+      const data = await managementApi.getSystemVersion()
+      setCurrentVersion(data.current_version || '—')
     } catch (e) {
       setErr(formatAxiosError(e))
+    }
+  }
+
+  async function loadUpdateStatusAndHistory(limit = 10) {
+    try {
+      const s = await managementApi.getUpdateStatus()
+      setUpdateStatus(s)
+    } catch (e) {
+      // status falhar não impede que a tela carregue
+    }
+    try {
+      const h = await managementApi.getUpdateHistory(limit)
+      setHistory(h || [])
+    } catch (e) {
+      // ignore
     }
   }
 
@@ -69,8 +89,8 @@ export default function ManagementPage() {
     setBusyCheckUpdate(true)
     try {
       const data = await managementApi.checkUpdate()
-      setUpdateInfo(data)
-      if (data.status === 'up_to_date') setMsg('Sistema já está atualizado.')
+      setCheckInfo(data)
+      if (!data.update_available) setMsg('Sistema já está atualizado.')
     } catch (e) {
       setErr(formatAxiosError(e))
     } finally {
@@ -78,19 +98,71 @@ export default function ManagementPage() {
     }
   }
 
-  async function handleRunUpdate() {
-    if (!window.confirm('Executar atualização do sistema agora?')) return
+  async function handleApplyUpdate() {
+    if (!checkInfo?.update_available || !checkInfo?.update_type) return
+
+    const updateType = checkInfo.update_type
+    let confirm = false
+    let confirm_strong = false
+    if (updateType === 'major') {
+      confirm = window.confirm('Atualização MAJOR vai alterar a aplicação. Confirmar?')
+      if (!confirm) return
+      confirm_strong = window.confirm('Confirmação forte: aceitar risco de instabilidade e rollback.')
+      if (!confirm_strong) return
+    } else if (updateType === 'minor') {
+      confirm = window.confirm('Atualização MINOR exige confirmação manual. Confirmar?')
+      if (!confirm) return
+    } else {
+      confirm = window.confirm('Atualização PATCH. Confirmar?')
+      if (!confirm) return
+    }
+
     setErr('')
     setMsg('')
-    setBusyRunUpdate(true)
+    setBusyApplyUpdate(true)
     try {
-      const data = await managementApi.runUpdate()
-      setUpdateInfo(data)
-      setMsg('Atualização iniciada. Acompanhe o progresso no log abaixo.')
+      const data = await managementApi.applyUpdate({
+        mode: 'manual',
+        confirm,
+        confirm_strong,
+        target_version: checkInfo.latest_version,
+      })
+      setUpdateStatus(prev => ({ ...prev, running: true, status: data.status }))
+      setMsg('Atualização iniciada. Acompanhe o log abaixo.')
+      await loadUpdateStatusAndHistory(10)
     } catch (e) {
       setErr(formatAxiosError(e))
     } finally {
-      setBusyRunUpdate(false)
+      setBusyApplyUpdate(false)
+    }
+  }
+
+  async function handleRollbackUpdate() {
+    if (!history?.length) return
+    const lastFailed = history.find(h => h.status === 'failed' || h.status === 'error')
+    if (!lastFailed) return
+
+    const confirm = window.confirm('Rollback vai restaurar uma versão anterior. Confirmar?')
+    if (!confirm) return
+    const confirm_strong = window.confirm('Confirmação forte: aceitar risco de instabilidade e interrupção curta?')
+    if (!confirm_strong) return
+
+    setErr('')
+    setMsg('')
+    setBusyRollbackUpdate(true)
+    try {
+      const data = await managementApi.rollbackUpdate({
+        confirm: true,
+        confirm_strong: true,
+        history_id: lastFailed.id,
+      })
+      setUpdateStatus(prev => ({ ...prev, running: true, status: data.status }))
+      setMsg('Rollback iniciado. Acompanhe o log abaixo.')
+      await loadUpdateStatusAndHistory(10)
+    } catch (e) {
+      setErr(formatAxiosError(e))
+    } finally {
+      setBusyRollbackUpdate(false)
     }
   }
 
@@ -128,28 +200,26 @@ export default function ManagementPage() {
   }
 
   useEffect(() => {
-    loadUpdateStatus()
+    loadSystemVersion()
+    loadUpdateStatusAndHistory(10)
   }, [])
 
   useEffect(() => {
-    if (!updateInfo?.running) return undefined
+    if (!updateStatus?.running) return undefined
     const t = window.setInterval(() => {
-      managementApi.getUpdateStatus().then(setUpdateInfo).catch(() => {})
+      loadUpdateStatusAndHistory(10).catch(() => {})
     }, 2500)
     return () => window.clearInterval(t)
-  }, [updateInfo?.running])
+  }, [updateStatus?.running])
 
   const statusLabel = useMemo(() => {
-    const s = updateInfo?.status
-    if (!s) return '—'
-    if (s === 'up_to_date') return 'Atualizado'
-    if (s === 'update_available') return 'Atualização disponível'
-    if (s === 'running') return 'Atualizando...'
-    if (s === 'checking') return 'Verificando...'
-    if (s === 'success') return 'Atualização concluída'
-    if (s === 'error') return 'Erro ao atualizar'
-    return s
-  }, [updateInfo?.status])
+    if (updateStatus?.running) return 'Atualizando...'
+    if (updateStatus?.status === 'idle') return 'Ocioso'
+    return updateStatus?.status || '—'
+  }, [updateStatus])
+
+  const lastHistory = history?.[0] || null
+  const lastFailedHistory = history?.find(h => h.status === 'failed' || h.status === 'error') || null
 
   return (
     <div className="space-y-4">
@@ -180,11 +250,11 @@ export default function ManagementPage() {
         <div className="grid gap-2 md:grid-cols-3 text-[12px]">
           <div className="rounded-lg border border-[#252840] bg-[#13151f] px-3 py-2">
             <p className="text-ink-muted text-[10px] uppercase tracking-wide">Versão atual</p>
-            <p className="text-ink-primary font-mono mt-0.5">{updateInfo?.current_version || '—'}</p>
+            <p className="text-ink-primary font-mono mt-0.5">{currentVersion}</p>
           </div>
           <div className="rounded-lg border border-[#252840] bg-[#13151f] px-3 py-2">
             <p className="text-ink-muted text-[10px] uppercase tracking-wide">Última versão disponível</p>
-            <p className="text-ink-primary font-mono mt-0.5">{updateInfo?.latest_version || '—'}</p>
+            <p className="text-ink-primary font-mono mt-0.5">{checkInfo?.latest_version || '—'}</p>
           </div>
           <div className="rounded-lg border border-[#252840] bg-[#13151f] px-3 py-2">
             <p className="text-ink-muted text-[10px] uppercase tracking-wide">Status</p>
@@ -192,36 +262,65 @@ export default function ManagementPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleCheckUpdate}
-            disabled={busyCheckUpdate || busyRunUpdate || updateInfo?.running}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#252840] text-ink-secondary text-[12px] font-semibold hover:bg-[#1e2235] disabled:opacity-50"
-          >
-            {busyCheckUpdate ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />}
-            Verificar atualização
-          </button>
+        <div className="space-y-3">
+          <div className="rounded-lg border border-[#252840] bg-[#0f111a] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] text-ink-muted">Tipo de update</p>
+              <p className="text-[11px] text-ink-primary font-mono">
+                {checkInfo?.update_available ? checkInfo.update_type : '—'}
+              </p>
+            </div>
+            {checkInfo?.latest_release_notes_summary && (
+              <div className="mt-2">
+                <p className="text-[11px] text-ink-muted mb-1">Changelog (resumo)</p>
+                <div className="max-h-24 overflow-y-auto text-[11px] text-ink-secondary whitespace-pre-wrap">
+                  {checkInfo.latest_release_notes_summary || '—'}
+                </div>
+              </div>
+            )}
+          </div>
 
-          {(updateInfo?.update_available || updateInfo?.status === 'update_available') && (
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleRunUpdate}
-              disabled={busyRunUpdate || busyCheckUpdate || updateInfo?.running}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-blue text-white text-[12px] font-semibold disabled:opacity-50"
+              onClick={handleCheckUpdate}
+              disabled={busyCheckUpdate || busyApplyUpdate || busyRollbackUpdate || updateStatus?.running}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#252840] text-ink-secondary text-[12px] font-semibold hover:bg-[#1e2235] disabled:opacity-50"
             >
-              {busyRunUpdate || updateInfo?.running ? <Loader2 size={13} className="animate-spin" /> : <Rocket size={13} />}
-              Atualizar versão
+              {busyCheckUpdate ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />}
+              Verificar agora
             </button>
-          )}
-        </div>
 
-        <div className="rounded-lg border border-[#252840] bg-[#0f111a] p-3">
-          <p className="text-[11px] text-ink-muted mb-1">Log da atualização</p>
-          <div className="max-h-52 overflow-y-auto text-[11px] font-mono text-ink-secondary whitespace-pre-wrap">
-            {updateInfo?.logs?.length
-              ? updateInfo.logs.slice().reverse().join('\n')
-              : 'Sem eventos de atualização.'}
+            {checkInfo?.update_available && (
+              <button
+                type="button"
+                onClick={handleApplyUpdate}
+                disabled={busyApplyUpdate || busyCheckUpdate || busyRollbackUpdate || updateStatus?.running}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-blue text-white text-[12px] font-semibold disabled:opacity-50"
+              >
+                {busyApplyUpdate || updateStatus?.running ? <Loader2 size={13} className="animate-spin" /> : <Rocket size={13} />}
+                Aplicar atualização ({checkInfo.update_type})
+              </button>
+            )}
+
+            {lastFailedHistory && (
+              <button
+                type="button"
+                onClick={handleRollbackUpdate}
+                disabled={busyRollbackUpdate || busyApplyUpdate || busyCheckUpdate || updateStatus?.running}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-red-500/30 text-red-200 text-[12px] font-semibold hover:bg-[#1e2235] disabled:opacity-50"
+              >
+                {busyRollbackUpdate ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />}
+                Rollback
+              </button>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-[#252840] bg-[#0f111a] p-3">
+            <p className="text-[11px] text-ink-muted mb-1">Log do updater</p>
+            <div className="max-h-52 overflow-y-auto text-[11px] font-mono text-ink-secondary whitespace-pre-wrap">
+              {lastHistory?.log_text ? lastHistory.log_text : 'Sem eventos de atualização.'}
+            </div>
           </div>
         </div>
       </div>

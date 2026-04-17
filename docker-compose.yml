@@ -1,5 +1,3 @@
-# PostgreSQL opcional para desenvolvimento. Em produção defina POSTGRES_PASSWORD (e utilizador)
-# no ambiente ou num ficheiro .env ao lado deste ficheiro — nunca commite senhas reais.
 services:
   postgres:
     image: postgres:16-alpine
@@ -8,15 +6,56 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-bgpuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devonly_change_me}
       POSTGRES_DB: ${POSTGRES_DB:-bgpmanager}
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bgpuser -d bgpmanager"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bgpuser} -d ${POSTGRES_DB:-bgpmanager}"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    container_name: bgpmanager-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bgpuser}:${POSTGRES_PASSWORD:-devonly_change_me}@postgres:5432/${POSTGRES_DB:-bgpmanager}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-change-me-please-32chars}
+      # Obrigatório em produção; defina em `.env` na raiz (não commite segredos).
+      FERNET_KEY: ${FERNET_KEY:-}
+      BOOTSTRAP_SUPERADMIN_USERNAME: ${BOOTSTRAP_SUPERADMIN_USERNAME:-superadmin}
+      BOOTSTRAP_SUPERADMIN_PASSWORD: ${BOOTSTRAP_SUPERADMIN_PASSWORD:-ChangeMe!SuperAdmin}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      SYSTEM_UPDATE_CONTAINER_NAME: ${SYSTEM_UPDATE_CONTAINER_NAME:-bgpmanager-backend}
+      SYSTEM_UPDATE_GITHUB_OWNER: ${SYSTEM_UPDATE_GITHUB_OWNER:-k3gsolutions}
+      SYSTEM_UPDATE_GITHUB_REPO: ${SYSTEM_UPDATE_GITHUB_REPO:-bgp_manager}
+      SYSTEM_UPDATE_GHCR_IMAGE_REPO: ${SYSTEM_UPDATE_GHCR_IMAGE_REPO:-ghcr.io/k3gsolutions/bgp_manager}
+      SYSTEM_UPDATE_HEALTH_PATH: ${SYSTEM_UPDATE_HEALTH_PATH:-/health}
+      SYSTEM_UPDATE_HEALTH_TIMEOUT_SECONDS: ${SYSTEM_UPDATE_HEALTH_TIMEOUT_SECONDS:-60}
+      SYSTEM_UPDATE_AUTO_PATCH: ${SYSTEM_UPDATE_AUTO_PATCH:-false}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app:ro
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: bgpmanager-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5174:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
 
 volumes:
   pgdata:

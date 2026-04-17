@@ -10,6 +10,7 @@ from .config import settings
 from .database import apply_schema_patches, create_tables
 from .middleware.user_audit_middleware import UserAuditMiddleware
 from .routers import auth, communities, companies, devices, logs, management, snmp, users
+from .routers.system_updates import router as system_updates_router
 from .services.startup_checks import run_startup_access_checks
 
 
@@ -75,6 +76,7 @@ app.include_router(communities.router)
 app.include_router(snmp.router)
 app.include_router(logs.router)
 app.include_router(management.router)
+app.include_router(system_updates_router)
 
 
 @app.get("/health")

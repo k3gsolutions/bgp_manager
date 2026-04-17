@@ -10,7 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import Base, get_db
 from ..deps.auth import CurrentUserCtx, require_permission
-from ..services.system_update_service import system_update_service
+try:
+    from ..services.system_update_service import system_update_service
+except Exception:  # pragma: no cover - fallback para ambientes container sem git
+    system_update_service = None
 
 router = APIRouter(prefix="/api/management", tags=["management"])
 
@@ -214,6 +217,8 @@ async def system_update_status(
     user: CurrentUserCtx = require_permission("management.backup"),
 ):
     _ensure_superadmin(user)
+    if system_update_service is None:
+        raise HTTPException(status_code=503, detail="Legacy updater indisponível neste ambiente.")
     return SystemUpdateStatusResponse.model_validate(system_update_service.status())
 
 
@@ -222,6 +227,8 @@ async def system_update_check(
     user: CurrentUserCtx = require_permission("management.backup"),
 ):
     _ensure_superadmin(user)
+    if system_update_service is None:
+        raise HTTPException(status_code=503, detail="Legacy updater indisponível neste ambiente.")
     return SystemUpdateStatusResponse.model_validate(system_update_service.check())
 
 
@@ -230,6 +237,8 @@ async def system_update_run(
     user: CurrentUserCtx = require_permission("management.backup"),
 ):
     _ensure_superadmin(user)
+    if system_update_service is None:
+        raise HTTPException(status_code=503, detail="Legacy updater indisponível neste ambiente.")
     try:
         state = system_update_service.start_update(user.username)
     except RuntimeError as e:

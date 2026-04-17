@@ -438,3 +438,22 @@ class CommunityChangeAudit(Base):
 
     device: Mapped["Device"] = relationship(back_populates="community_change_audits")
     community_set: Mapped["CommunitySet | None"] = relationship(back_populates="audits")
+
+
+class SystemUpdateHistory(Base):
+    """Histórico completo de updates do sistema (check/apply/rollback) via updater separado."""
+
+    __tablename__ = "system_update_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    from_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    update_type: Mapped[str] = mapped_column(String(16), nullable=False)  # patch | minor | major
+    triggered_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)  # check | manual | auto_patch | rollback
+    status: Mapped[str] = mapped_column(String(24), nullable=False)  # in_progress | success | failed | rolled_back | blocked | checked
+    log_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    triggered_user: Mapped["User | None"] = relationship("User", lazy="joined")

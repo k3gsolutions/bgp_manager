@@ -141,6 +141,10 @@ Aplicação web para operação de rede com foco em Huawei VRP (NE8000), central
   - Endpoints live (coleta sem persistência).
 - `routers/logs.py`
   - API de leitura dos últimos eventos para a aba de log.
+ - `routers/system_updates.py`
+   - Atualização remota segura via GitHub Releases + imagem versionada no GHCR.
+   - Endpoints: `GET /api/system/version`, `GET /api/system/update-status`, `POST /api/system/check-update`,
+     `POST /api/system/apply-update`, `POST /api/system/rollback-update`, `GET /api/system/update-history`.
 
 ### Serviços
 
@@ -151,6 +155,10 @@ Aplicação web para operação de rede com foco em Huawei VRP (NE8000), central
 - `services/inventory_persist.py`: funções de persistência e classificação (incluindo iBGP/eBGP e papéis).
 - `services/inventory_history.py`: registro de eventos de mudança de inventário.
 - `services/startup_checks.py`: validação automática de SSH/SNMP no startup.
+ - `services/system_update_remote_service.py`
+   - Lê versão local, consulta GitHub, classifica semver (patch/minor/major), cria histórico e inicia o updater.
+ - `updater/system_update_worker.py` (processo separado)
+   - Executa `docker pull`, recria container preservando volumes/env/ports, valida `/health` e faz rollback se necessário.
 
 ### Parsing Huawei VRP
 
