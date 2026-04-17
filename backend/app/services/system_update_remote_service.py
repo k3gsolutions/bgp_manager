@@ -212,7 +212,7 @@ async def check_update(db, user_id: int) -> dict[str, Any]:
     if release is None:
         hint = (
             "Não há Release publicado nem tag semver no repositório remoto. "
-            "Crie uma tag (ex.: v0.1.0) ou publique um Release no GitHub."
+            "Crie uma tag (ex.: v0.1.1) ou publique um Release no GitHub."
         )
         last_checked = _now_iso()
         with _lock:

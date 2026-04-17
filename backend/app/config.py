@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # Versão da aplicação (usada no módulo de update remoto).
     # Em produção, o ideal é setar via env `APP_VERSION` no build do container.
-    app_version: str = "0.1.0"
+    app_version: str = "0.1.1"
 
     # GitHub Releases (para consulta de updates).
     system_update_github_owner: str = "k3gsolutions"

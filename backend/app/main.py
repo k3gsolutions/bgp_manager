@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="BGP Manager API",
     description="Gerenciamento de dispositivos de rede — Huawei NE8000",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 

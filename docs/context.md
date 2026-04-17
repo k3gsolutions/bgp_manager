@@ -156,7 +156,7 @@ Aplicação web para operação de rede com foco em Huawei VRP (NE8000), central
 - `services/inventory_history.py`: registro de eventos de mudança de inventário.
 - `services/startup_checks.py`: validação automática de SSH/SNMP no startup.
  - `services/system_update_remote_service.py`
-   - Lê versão local, consulta GitHub, classifica semver (patch/minor/major), cria histórico e inicia o updater.
+   - Lê versão local (`APP_VERSION` / `settings.app_version`), consulta GitHub (Release ou tags semver), classifica semver (patch/minor/major), cria histórico e inicia o updater. **Ao publicar uma versão:** incrementar semver no código (config, `main.py`, compose, `package.json`), criar no GitHub a tag `vX.Y.Z` alinhada ao `APP_VERSION`, e redeploy com a mesma versão.
  - `updater/system_update_worker.py` (processo separado)
    - Executa `docker pull`, recria container preservando volumes/env/ports, valida `/health` e faz rollback se necessário.
 

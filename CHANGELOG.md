@@ -2,11 +2,28 @@
 
 Todas as mudanças relevantes da aplicação devem ser registradas neste arquivo.
 
+**Versão e updates remotos:** `APP_VERSION` (backend) deve seguir semver e **coincidir com a tag no GitHub** (ex. `0.1.1` ↔ `v0.1.1`) para instalações remotas verem atualização ao usar *Verificar agora*. Em [semver](https://semver.org/): *patch* (0.1.0→0.1.1) = correções compatíveis; *minor* = funcionalidades novas sem quebrar API; *major* = mudanças incompatíveis. Coloquialmente um **fix** costuma ser um *patch*; **update** é qualquer nova versão (patch, minor ou major).
+
 Formato sugerido:
 - data (`YYYY-MM-DD`)
 - módulo/área afetada
 - resumo do que mudou
 - impacto operacional (quando aplicável)
+
+## 0.1.1 — 2026-04-17
+
+### Versão
+- Bump para **0.1.1** em `backend/app/config.py` (`app_version`), `backend/app/main.py` (OpenAPI), `docker-compose.yml` (default `APP_VERSION`), `frontend/package.json` e lockfile.
+- `.env.example`: `APP_VERSION` documentado para alinhar deploy com tags GitHub.
+
+### Backend — System update (GitHub)
+- Correção regex semver em `system_update_remote_service` (evita 500 em *check-update*).
+- Se não existir `releases/latest`, fallback para **tags** semver; se não houver tag remota, resposta **200** com `status: no_upstream_release` (em vez de erro 404 da API GitHub).
+
+### Frontend
+- BGP: título/tooltip do modal de prefixos SSH inclui o nome do peer.
+
+**Release no GitHub:** após merge na `main`, criar tag **`v0.1.1`** (e opcionalmente GitHub Release) para que instalações com `APP_VERSION=0.1.0` detectem update; após deploy da nova imagem/build, definir `APP_VERSION=0.1.1` no ambiente.
 
 ## 2026-04-15
 
