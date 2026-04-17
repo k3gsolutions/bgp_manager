@@ -17,7 +17,7 @@ from ..config import settings
 from ..models import SystemUpdateHistory
 
 
-_SEMVER_RE = re.compile(r"^v?(\\d+)\\.(\\d+)\\.(\\d+)$")
+_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
 
 app_env = settings.app_env or ""
