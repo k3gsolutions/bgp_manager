@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import sys
@@ -10,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from ..config import settings
@@ -67,22 +66,108 @@ def _release_notes_summary(release: dict[str, Any], max_len: int = 600) -> str |
     return body[: max_len - 3].rstrip() + "..."
 
 
-async def _github_latest_release(owner: str, repo: str, token: str | None) -> dict[str, Any]:
-    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+def _github_headers(token: str | None) -> dict[str, str]:
     headers: dict[str, str] = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "bgp-manager-system-updater",
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    timeout = httpx.Timeout(15.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    return headers
+
+
+def pick_latest_semver_tag(tag_names: list[str]) -> str | None:
+    """Escolhe a maior versão semver entre nomes de tag (ex.: v1.0.0, 0.2.1)."""
+    best: tuple[int, int, int] | None = None
+    best_norm: str | None = None
+    for raw in tag_names:
+        nt = _normalize_tag((raw or "").strip())
+        if not nt:
+            continue
+        parsed = parse_semver(nt)
+        if parsed is None:
+            continue
+        if best is None or parsed > best:
+            best = parsed
+            best_norm = nt
+    return best_norm
+
+
+async def _github_list_tag_names(
+    client: httpx.AsyncClient,
+    api_repo_base: str,
+    headers: dict[str, str],
+) -> list[str]:
+    names: list[str] = []
+    page = 1
+    while page <= 10:
+        url = f"{api_repo_base}/tags?per_page=100&page={page}"
         r = await client.get(url, headers=headers)
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="GitHub não encontrou releases/latest para o repositório.")
         if r.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"Falha ao consultar GitHub: {r.status_code} {r.text[:200]}")
-        return r.json()
+            raise HTTPException(
+                status_code=502,
+                detail=f"Falha ao listar tags no GitHub: {r.status_code} {r.text[:200]}",
+            )
+        batch = r.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        for item in batch:
+            if isinstance(item, dict):
+                n = item.get("name")
+                if n:
+                    names.append(str(n))
+        if len(batch) < 100:
+            break
+        page += 1
+    return names
+
+
+async def _github_release_or_semver_tag(
+    owner: str,
+    repo: str,
+    token: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """
+    Obtém metadados remotos: primeiro `releases/latest`; se 404 ou tag sem semver,
+    usa a maior tag semver listada em `/tags`.
+
+    Retorna (payload estilo release, fonte) ou (None, None) se não houver tag semver no remoto.
+    """
+    headers = _github_headers(token)
+    timeout = httpx.Timeout(15.0, connect=10.0)
+    api_base = f"https://api.github.com/repos/{owner}/{repo}"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.get(f"{api_base}/releases/latest", headers=headers)
+
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict):
+                tag = (data.get("tag_name") or "").strip()
+                if tag:
+                    nt = _normalize_tag(tag)
+                    if parse_semver(nt) is not None:
+                        return data, "release/latest"
+
+        elif r.status_code == 404:
+            pass
+        else:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Falha ao consultar GitHub (releases/latest): {r.status_code} {r.text[:200]}",
+            )
+
+        tag_names = await _github_list_tag_names(client, api_base, headers)
+        best = pick_latest_semver_tag(tag_names)
+        if best is None:
+            return None, None
+
+        synthetic: dict[str, Any] = {
+            "tag_name": best,
+            "body": "",
+            "name": best,
+        }
+        return synthetic, "tags"
 
 
 @dataclass
@@ -115,20 +200,43 @@ async def check_update(db, user_id: int) -> dict[str, Any]:
     if not owner or not repo:
         raise HTTPException(status_code=500, detail="Configurar system_update_github_owner/system_update_github_repo.")
 
-    token = (settings.system_update_github_token or "").strip() if hasattr(settings, "system_update_github_token") else ""
-    token = token or None
+    token = (settings.system_update_github_token or "").strip() or None
 
-    release: dict[str, Any]
     try:
-        release = await _github_latest_release(owner=owner, repo=repo, token=token)
+        release, source = await _github_release_or_semver_tag(owner=owner, repo=repo, token=token)
     except HTTPException:
         raise
     except Exception as e:  # pragma: no cover
         raise HTTPException(status_code=502, detail=f"Falha ao consultar GitHub: {e!s}") from e
 
+    if release is None:
+        hint = (
+            "Não há Release publicado nem tag semver no repositório remoto. "
+            "Crie uma tag (ex.: v0.1.0) ou publique um Release no GitHub."
+        )
+        last_checked = _now_iso()
+        with _lock:
+            _state.last_checked_at = last_checked
+            _state.latest_version = None
+            _state.update_available = False
+            _state.update_type = "none"
+            _state.latest_release_notes_summary = hint
+            _state.latest_tag_source = None
+        return {
+            "update_available": False,
+            "update_type": "none",
+            "current_version": current_tag,
+            "latest_version": None,
+            "latest_release_notes_summary": hint,
+            "latest_tag_source": None,
+            "last_check_id": None,
+            "status": "no_upstream_release",
+            "last_checked_at": last_checked,
+        }
+
     tag = (release.get("tag_name") or "").strip()
     if not tag:
-        raise HTTPException(status_code=502, detail="GitHub release sem tag_name.")
+        raise HTTPException(status_code=502, detail="GitHub: resposta sem tag_name.")
 
     latest_tag = _normalize_tag(tag)
     if parse_semver(latest_tag) is None:
@@ -138,6 +246,7 @@ async def check_update(db, user_id: int) -> dict[str, Any]:
     available = utype != "none"
 
     summary = _release_notes_summary(release)
+    tag_source = source or "release/latest"
     last_checked = _now_iso()
     with _lock:
         _state.last_checked_at = last_checked
@@ -145,7 +254,7 @@ async def check_update(db, user_id: int) -> dict[str, Any]:
         _state.update_available = available
         _state.update_type = utype
         _state.latest_release_notes_summary = summary
-        _state.latest_tag_source = "release/latest"
+        _state.latest_tag_source = tag_source
 
     status_str = "update_available" if available else "up_to_date"
     return {
@@ -154,7 +263,7 @@ async def check_update(db, user_id: int) -> dict[str, Any]:
         "current_version": current_tag,
         "latest_version": latest_tag if available else current_tag,
         "latest_release_notes_summary": summary,
-        "latest_tag_source": "release/latest",
+        "latest_tag_source": tag_source,
         "last_check_id": None,
         "status": status_str,
         "last_checked_at": last_checked,

@@ -90,7 +90,11 @@ export default function ManagementPage() {
     try {
       const data = await managementApi.checkUpdate()
       setCheckInfo(data)
-      if (!data.update_available) setMsg('Sistema já está atualizado.')
+      if (data.status === 'no_upstream_release') {
+        setMsg(data.latest_release_notes_summary || 'Não há Release nem tag semver no GitHub para comparar.')
+      } else if (!data.update_available) {
+        setMsg('Sistema já está atualizado.')
+      }
     } catch (e) {
       setErr(formatAxiosError(e))
     } finally {

@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # GitHub Releases (para consulta de updates).
     system_update_github_owner: str = "k3gsolutions"
     system_update_github_repo: str = "bgp_manager"
+    # Opcional: token para repositório privado ou maior limite de API.
+    system_update_github_token: str = ""
 
     # Docker/OCI image esperada (para updates versionados).
     # Ex.: ghcr.io/k3gsolutions/bgp_manager:vX.Y.Z
