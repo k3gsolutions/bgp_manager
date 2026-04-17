@@ -25,6 +25,10 @@ Formato sugerido:
 
 **Release no GitHub:** após merge na `main`, criar tag **`v0.1.1`** (e opcionalmente GitHub Release) para que instalações com `APP_VERSION=0.1.0` detectem update; após deploy da nova imagem/build, definir `APP_VERSION=0.1.1` no ambiente.
 
+### Docker — system update (*apply-update*)
+- Imagem do backend inclui o **cliente Docker** (multi-stage a partir de `docker:27-cli`) para o worker executar `docker version` / `pull` / `run`.
+- `docker-compose.yml`: montagem de **`/var/run/docker.sock`** no serviço `backend` para falar com o Docker do host (equivalente a acesso privilegiado ao host; usar só em ambientes confiáveis).
+
 ## 2026-04-15
 
 ### Backend / Frontend — Communities (Huawei NE8000 VRP)

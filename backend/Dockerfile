@@ -1,4 +1,9 @@
+# Cliente Docker (sem daemon): o worker de system update usa o socket do host (ver docker-compose).
+FROM docker:27-cli AS dockercli
+
 FROM python:3.12-slim
+
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

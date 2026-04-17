@@ -159,6 +159,7 @@ Aplicação web para operação de rede com foco em Huawei VRP (NE8000), central
    - Lê versão local (`APP_VERSION` / `settings.app_version`), consulta GitHub (Release ou tags semver), classifica semver (patch/minor/major), cria histórico e inicia o updater. **Ao publicar uma versão:** incrementar semver no código (config, `main.py`, compose, `package.json`), criar no GitHub a tag `vX.Y.Z` alinhada ao `APP_VERSION`, e redeploy com a mesma versão.
  - `updater/system_update_worker.py` (processo separado)
    - Executa `docker pull`, recria container preservando volumes/env/ports, valida `/health` e faz rollback se necessário.
+   - **Deploy Docker:** o container do backend precisa do binário `docker` (incluído na imagem) e do volume `/var/run/docker.sock` do host (ver `docker-compose.yml`). Sem isso, *apply-update* falha com «Docker não disponível».
 
 ### Parsing Huawei VRP
 

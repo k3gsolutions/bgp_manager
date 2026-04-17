@@ -46,6 +46,8 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/app:/app/app:ro
+      # System updater: acede ao Docker do host (pull/recriar container). Equivale a root no host — só em ambientes confiáveis.
+      - /var/run/docker.sock:/var/run/docker.sock
 
   frontend:
     build:
