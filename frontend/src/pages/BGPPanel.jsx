@@ -56,9 +56,12 @@ function peerShowsAdvertisedRoutes(peer) {
   return Boolean(peer?.is_provider || peer?.is_ix || peer?.is_cdn)
 }
 
-function advertisedRoutesModalTitle(peer) {
-  if (!peer) return 'Prefixos advertidos (SSH)'
-  return `Prefixos advertidos (SSH) — ${peerRoleLabel(peerRoleKey(peer))}`
+/** Título do modal / tooltip: prefixos + nome do peer (ex.: — [C01-Operadora]). */
+function prefixRoutesModalTitle(peer, kind) {
+  const name = peer ? peerTableDisplayName(peer) : '—'
+  return kind === 'provider'
+    ? `Prefixos advertidos (SSH) — [${name}]`
+    : `Prefixos recebidos (SSH) — [${name}]`
 }
 
 /** Nome na tabela: backend envia `peer_display_name` (Cxx-… para Operadora/IX/CDN). */
@@ -667,7 +670,7 @@ export default function BGPPanel({ device }) {
                         {peerShowsAdvertisedRoutes(peer) && isHuawei && (
                           <button
                             type="button"
-                            title="Prefixos advertidos (SSH — Operadora, IX ou CDN)"
+                            title={prefixRoutesModalTitle(peer, 'provider')}
                             onClick={() => loadPeerRouteList(peer, 'provider')}
                             disabled={!peer.is_active || (advLoading && advPeer?.id === peer.id)}
                             className="inline-flex items-center justify-center w-6 h-6 rounded border border-[#2b3046] text-ink-muted hover:text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-40"
@@ -680,7 +683,7 @@ export default function BGPPanel({ device }) {
                         {peer.is_customer && isHuawei && (
                           <button
                             type="button"
-                            title="Prefixos recebidos (SSH — received-routes, só Cliente)"
+                            title={prefixRoutesModalTitle(peer, 'customer')}
                             onClick={() => loadPeerRouteList(peer, 'customer')}
                             disabled={!peer.is_active || (advLoading && advPeer?.id === peer.id)}
                             className="inline-flex items-center justify-center w-6 h-6 rounded border border-[#2b3046] text-ink-muted hover:text-purple-400 hover:bg-purple-500/10 transition-colors disabled:opacity-40"
@@ -797,9 +800,7 @@ export default function BGPPanel({ device }) {
           <div className="w-full max-w-2xl max-h-[90vh] flex flex-col bg-[#11141f] border border-[#2b3046] rounded-xl shadow-xl">
             <div className="px-4 py-3 border-b border-[#1e2235] flex items-center justify-between shrink-0">
               <h3 className="text-[14px] font-bold text-ink-primary">
-                {advKind === 'provider'
-                  ? advertisedRoutesModalTitle(advPeer)
-                  : 'Prefixos recebidos (SSH) — Cliente'}
+                {prefixRoutesModalTitle(advPeer, advKind)}
               </h3>
               <button type="button" onClick={closeAdvModal} className="px-2 py-1 text-[11px] text-ink-muted hover:text-ink-primary">
                 Fechar
